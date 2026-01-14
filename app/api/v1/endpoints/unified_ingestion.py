@@ -54,6 +54,7 @@ class TextIngestRequest(BaseModel):
     **Supported file types:**
     - `.txt`, `.text` - Plain text files
     - `.pdf` - PDF documents (with automatic issue handling)
+    - `.docx` - Microsoft Word documents
     
     **PDF Issue Handling (automatic):**
     - Text cleaning (removes excessive whitespace, fixes ligatures)
@@ -212,6 +213,7 @@ async def upload_document(
     **Supported file types:**
     - `.txt`, `.text` - Plain text files
     - `.pdf` - PDF documents
+    - `.docx` - Microsoft Word documents
     
     The system automatically detects each file's type and processes accordingly.
     """,
@@ -356,11 +358,7 @@ async def ingest_text(request: TextIngestRequest):
 async def get_supported_types():
     supported_types = unified_loader.get_supported_types()
     
-    type_descriptions = {
-        '.txt': 'Plain text files',
-        '.text': 'Plain text files',
-        '.pdf': 'PDF documents',
-    }
+    type_descriptions = unified_loader.get_supported_types_with_descriptions()
     
     return {
         "supported_extensions": supported_types,

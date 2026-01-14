@@ -10,6 +10,7 @@ from langchain_core.documents import Document
 
 from app.rag.document_loaders import TextDocumentLoader
 from app.rag.pdf_loaders import PDFDocumentLoader
+from app.rag.word_loaders import WordDocumentLoader
 from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -24,12 +25,14 @@ class UnifiedDocumentLoader:
         '.txt': 'text',
         '.text': 'text',
         '.pdf': 'pdf',
-        # Future: .docx, .csv, .xlsx, .json, etc.
+        '.docx': 'word',
+        # Future: .csv, .xlsx, .json, etc.
     }
     
     def __init__(self):
         self.text_loader = TextDocumentLoader()
         self.pdf_loader = PDFDocumentLoader()
+        self.word_loader = WordDocumentLoader()
     
     def detect_file_type(self, file_path: str) -> str:
         """
@@ -52,6 +55,8 @@ class UnifiedDocumentLoader:
                     return 'text'
                 elif mime_type == 'application/pdf':
                     return 'pdf'
+                elif mime_type == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
+                    return 'word'
         
         if not file_type:
             raise ValueError(
@@ -85,9 +90,20 @@ class UnifiedDocumentLoader:
                     return 'pdf'
         
         if not file_type:
-            # Try to detect from content (check PDF magic bytes)
+            # Try to detect from content (check magic bytes)
             if content.startswith(b'%PDF'):
                 return 'pdf'
+            elif content.startswith(b'PK'):  # ZIP-based formats (.docx, .xlsx, etc.)
+                # Check if it's a Word document by looking for specific structure
+                # This is a simple heuristic - .docx files are ZIP archives
+                try:
+                    import zipfile
+                    import io
+                    zip_file = zipfile.ZipFile(io.BytesIO(content))
+                    if 'word/document.xml' in zip_file.namelist():
+                        return 'word'
+                except Exception:
+                    pass
             # Try to decode as text
             try:
                 content.decode('utf-8')
@@ -132,6 +148,8 @@ class UnifiedDocumentLoader:
             self.pdf_loader.password = password
             self.pdf_loader.max_pages = max_pages
             return self.pdf_loader.load_file(file_path, metadata)
+        elif file_type == 'word':
+            return self.word_loader.load_file(file_path, metadata)
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
     
@@ -169,6 +187,8 @@ class UnifiedDocumentLoader:
             self.pdf_loader.password = password
             self.pdf_loader.max_pages = max_pages
             return self.pdf_loader.load_bytes(content, metadata)
+        elif file_type == 'word':
+            return self.word_loader.load_bytes(content, metadata)
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
     
@@ -211,3 +231,17 @@ class UnifiedDocumentLoader:
             List of supported file extensions
         """
         return list(self.SUPPORTED_EXTENSIONS.keys())
+    
+    def get_supported_types_with_descriptions(self) -> dict:
+        """
+        Get supported file types with descriptions
+        
+        Returns:
+            Dictionary mapping extensions to descriptions
+        """
+        return {
+            '.txt': 'Plain text files',
+            '.text': 'Plain text files',
+            '.pdf': 'PDF documents',
+            '.docx': 'Microsoft Word documents',
+        }
