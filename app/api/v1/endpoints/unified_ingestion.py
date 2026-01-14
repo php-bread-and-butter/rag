@@ -32,6 +32,8 @@ class FilesIngestRequest(BaseModel):
     """Request model for ingesting files from paths"""
     file_paths: List[str] = Field(..., description="List of file paths on the server", example=["/path/to/file1.pdf", "/path/to/file2.txt"])
     use_pymupdf: bool = Field(True, description="Use PyMuPDF for PDF processing (faster, better)")
+    password: Optional[str] = Field(None, description="Password for encrypted PDFs (if needed)")
+    max_pages: Optional[int] = Field(None, description="Maximum pages to process for large PDFs (None for all)")
     metadata: Optional[dict] = Field(None, description="Optional metadata to attach to all documents", example={"source": "documents", "category": "tutorial"})
 
 
@@ -47,20 +49,28 @@ class TextIngestRequest(BaseModel):
     status_code=status.HTTP_201_CREATED,
     summary="Upload and ingest a document",
     description="""
-    Upload and ingest a document with automatic file type detection.
+    Upload and ingest a document with automatic file type detection and issue handling.
     
     **Supported file types:**
     - `.txt`, `.text` - Plain text files
-    - `.pdf` - PDF documents
+    - `.pdf` - PDF documents (with automatic issue handling)
+    
+    **PDF Issue Handling (automatic):**
+    - Text cleaning (removes excessive whitespace, fixes ligatures)
+    - Empty page filtering (skips pages with <50 characters)
+    - Encryption detection and handling (if password provided)
+    - Scanned PDF detection (flagged in metadata)
+    - Large file handling (with page limits)
+    - Enhanced metadata (page numbers, char counts, etc.)
     
     **How it works:**
     1. Upload a file (any supported type)
     2. System automatically detects the file type
-    3. Uses appropriate processor (text loader or PDF loader)
-    4. Returns processed documents with metadata
+    3. Uses appropriate processor with issue handling
+    4. Returns processed documents with enhanced metadata
     
     **Example:**
-    - Upload a PDF: Returns one Document per page
+    - Upload a PDF: Returns one Document per page (empty pages skipped)
     - Upload a TXT: Returns a single Document
     """,
     response_description="Document ingestion result with page count and content preview",
@@ -88,13 +98,15 @@ class TextIngestRequest(BaseModel):
                 }
             }
         },
-        400: {"description": "Invalid file type or encoding error"},
+        400: {"description": "Invalid file type, encoding error, or encrypted PDF without password"},
         500: {"description": "Internal server error"}
     }
 )
 async def upload_document(
     file: UploadFile = File(..., description="File to upload (.txt, .text, or .pdf)"),
-    use_pymupdf: bool = File(True, description="Use PyMuPDF for PDF processing (faster, better)")
+    use_pymupdf: bool = File(True, description="Use PyMuPDF for PDF processing (faster, better)"),
+    password: Optional[str] = File(None, description="Password for encrypted PDFs (if needed)"),
+    max_pages: Optional[int] = File(None, description="Maximum pages to process for large PDFs (None for all)")
 ):
     logger.info(
         f"Document upload request | "
@@ -118,12 +130,14 @@ async def upload_document(
             "uploaded": True
         }
         
-        # Load document using unified loader
+        # Load document using unified loader (with PDF issue handling)
         documents = unified_loader.load_bytes(
             filename=file.filename or "unknown",
             content=content,
             metadata=metadata,
-            use_pymupdf=use_pymupdf
+            use_pymupdf=use_pymupdf,
+            password=password,
+            max_pages=max_pages
         )
         
         total_chars = sum(len(doc.page_content) for doc in documents)
@@ -214,7 +228,9 @@ async def ingest_files(request: FilesIngestRequest):
         documents = unified_loader.load_files(
             request.file_paths,
             request.metadata,
-            request.use_pymupdf
+            request.use_pymupdf,
+            request.password,
+            request.max_pages
         )
         
         total_chars = sum(len(doc.page_content) for doc in documents)

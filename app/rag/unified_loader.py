@@ -107,7 +107,9 @@ class UnifiedDocumentLoader:
         self,
         file_path: str,
         metadata: Optional[dict] = None,
-        use_pymupdf: bool = True
+        use_pymupdf: bool = True,
+        password: Optional[str] = None,
+        max_pages: Optional[int] = None
     ) -> List[Document]:
         """
         Load a file using the appropriate loader based on file type
@@ -127,6 +129,8 @@ class UnifiedDocumentLoader:
             return self.text_loader.load_file(file_path, metadata)
         elif file_type == 'pdf':
             self.pdf_loader.use_pymupdf = use_pymupdf
+            self.pdf_loader.password = password
+            self.pdf_loader.max_pages = max_pages
             return self.pdf_loader.load_file(file_path, metadata)
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
@@ -136,7 +140,9 @@ class UnifiedDocumentLoader:
         filename: str,
         content: bytes,
         metadata: Optional[dict] = None,
-        use_pymupdf: bool = True
+        use_pymupdf: bool = True,
+        password: Optional[str] = None,
+        max_pages: Optional[int] = None
     ) -> List[Document]:
         """
         Load a file from bytes using the appropriate loader
@@ -160,6 +166,8 @@ class UnifiedDocumentLoader:
             return [self.text_loader.load_text(text_content, doc_metadata)]
         elif file_type == 'pdf':
             self.pdf_loader.use_pymupdf = use_pymupdf
+            self.pdf_loader.password = password
+            self.pdf_loader.max_pages = max_pages
             return self.pdf_loader.load_bytes(content, metadata)
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
@@ -168,7 +176,9 @@ class UnifiedDocumentLoader:
         self,
         file_paths: List[str],
         metadata: Optional[dict] = None,
-        use_pymupdf: bool = True
+        use_pymupdf: bool = True,
+        password: Optional[str] = None,
+        max_pages: Optional[int] = None
     ) -> List[Document]:
         """
         Load multiple files using appropriate loaders
@@ -183,7 +193,13 @@ class UnifiedDocumentLoader:
         """
         all_documents = []
         for file_path in file_paths:
-            documents = self.load_file(file_path, metadata, use_pymupdf)
+            documents = self.load_file(
+                file_path,
+                metadata,
+                use_pymupdf,
+                password,
+                max_pages
+            )
             all_documents.extend(documents)
         return all_documents
     
