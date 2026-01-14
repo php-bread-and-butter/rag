@@ -5,10 +5,14 @@ pydantic-settings==2.1.0
 python-multipart==0.0.6
 
 # Step 1: Text Data Ingestion
-langchain==0.1.0
-langchain-community==0.0.10
+langchain>=0.1.0
+langchain-community>=0.0.10
+langchain-core>=0.1.0
 python-dotenv==1.0.0
 tiktoken>=0.8.0
+
+# Step 2: Text Splitting Techniques
+langchain-text-splitters>=0.0.1
 
 # Development
 pytest==7.4.3
