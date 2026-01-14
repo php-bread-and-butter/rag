@@ -22,6 +22,9 @@ dependencies = [
     "tiktoken>=0.8.0",
     # Step 2: Text Splitting Techniques
     "langchain-text-splitters>=0.0.1",
+    # Step 3: PDF Document Ingestion
+    "pypdf>=3.0.0",
+    "pymupdf>=1.23.0",
 ]
 
 [project.optional-dependencies]
