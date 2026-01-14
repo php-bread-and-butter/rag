@@ -3,7 +3,7 @@ API v1 router aggregation
 """
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import unified_ingestion, unified_splitting
+from app.api.v1.endpoints import unified_ingestion, unified_splitting, embeddings
 
 api_router = APIRouter()
 
@@ -18,4 +18,10 @@ api_router.include_router(
     unified_splitting.router,
     prefix="/splitting",
     tags=["Text Splitting"]
+)
+
+api_router.include_router(
+    embeddings.router,
+    prefix="/embeddings",
+    tags=["Embeddings"]
 )

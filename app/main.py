@@ -49,11 +49,15 @@ app = FastAPI(
     tags_metadata=[
         {
             "name": "Document Ingestion",
-            "description": "Upload and ingest documents. Supports automatic file type detection for TXT and PDF files.",
+            "description": "Upload and ingest documents. Supports automatic file type detection for TXT, PDF, Word, CSV, Excel, JSON, and SQL files.",
         },
         {
             "name": "Text Splitting",
             "description": "Split text and documents into chunks using various splitting techniques.",
+        },
+        {
+            "name": "Embeddings",
+            "description": "Generate text embeddings using HuggingFace models. Supports single queries, batch documents, and similarity calculations.",
         },
     ],
 )

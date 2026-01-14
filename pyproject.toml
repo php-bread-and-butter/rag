@@ -34,6 +34,9 @@ dependencies = [
     # (JSONLoader uses langchain-community, already included)
     # Step 8: SQL Database Parsing
     "sqlalchemy>=2.0.0",
+    # Embeddings
+    "langchain-huggingface>=0.0.1",
+    "numpy>=1.24.0",
 ]
 
 [project.optional-dependencies]
