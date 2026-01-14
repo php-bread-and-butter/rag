@@ -12,6 +12,7 @@ from app.rag.document_loaders import TextDocumentLoader
 from app.rag.pdf_loaders import PDFDocumentLoader
 from app.rag.word_loaders import WordDocumentLoader
 from app.rag.csv_excel_loaders import CSVExcelLoader
+from app.rag.json_loaders import JSONDocumentLoader
 from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -30,14 +31,18 @@ class UnifiedDocumentLoader:
         '.csv': 'csv',
         '.xlsx': 'excel',
         '.xls': 'excel',
-        # Future: .json, etc.
+        '.json': 'json',
+        '.jsonl': 'json',
     }
     
     def __init__(
         self,
         word_loader_type: str = "python-docx",
         csv_row_based: bool = False,
-        csv_intelligent_formatting: bool = True
+        csv_intelligent_formatting: bool = True,
+        json_loader_type: str = "intelligent",
+        json_jq_schema: Optional[str] = None,
+        json_text_content: bool = False
     ):
         """
         Initialize unified loader
@@ -46,6 +51,9 @@ class UnifiedDocumentLoader:
             word_loader_type: Type of Word loader to use ('python-docx', 'docx2txt', 'unstructured')
             csv_row_based: For CSV files, create one document per row
             csv_intelligent_formatting: Use intelligent structured content format for CSV rows
+            json_loader_type: Type of JSON loader to use ('intelligent', 'jsonloader', 'jsonloader_jq')
+            json_jq_schema: jq query schema for JSONLoader (e.g., ".employees[]")
+            json_text_content: For JSONLoader, whether to extract text content
         """
         self.text_loader = TextDocumentLoader()
         self.pdf_loader = PDFDocumentLoader()
@@ -53,6 +61,11 @@ class UnifiedDocumentLoader:
         self.csv_excel_loader = CSVExcelLoader(
             row_based=csv_row_based,
             intelligent_formatting=csv_intelligent_formatting
+        )
+        self.json_loader = JSONDocumentLoader(
+            loader_type=json_loader_type,
+            jq_schema=json_jq_schema,
+            text_content=json_text_content
         )
     
     def detect_file_type(self, file_path: str) -> str:
@@ -83,6 +96,8 @@ class UnifiedDocumentLoader:
                 elif mime_type in ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                                    'application/vnd.ms-excel']:
                     return 'excel'
+                elif mime_type == 'application/json':
+                    return 'json'
         
         if not file_type:
             raise ValueError(
@@ -114,6 +129,8 @@ class UnifiedDocumentLoader:
                     return 'text'
                 elif mime_type == 'application/pdf':
                     return 'pdf'
+                elif mime_type == 'application/json':
+                    return 'json'
         
         if not file_type:
             # Try to detect from content (check magic bytes)
@@ -133,6 +150,13 @@ class UnifiedDocumentLoader:
                         return 'excel'
                 except Exception:
                     pass
+            # Try to detect JSON (starts with { or [)
+            try:
+                decoded = content.decode('utf-8').strip()
+                if decoded.startswith('{') or decoded.startswith('['):
+                    return 'json'
+            except (UnicodeDecodeError, AttributeError):
+                pass
             # Try to decode as text
             try:
                 content.decode('utf-8')
@@ -181,6 +205,8 @@ class UnifiedDocumentLoader:
             return self.word_loader.load_file(file_path, metadata)
         elif file_type in ['csv', 'excel']:
             return self.csv_excel_loader.load_file(file_path, metadata)
+        elif file_type == 'json':
+            return self.json_loader.load_file(file_path, metadata)
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
     
@@ -222,6 +248,8 @@ class UnifiedDocumentLoader:
             return self.word_loader.load_bytes(content, metadata)
         elif file_type in ['csv', 'excel']:
             return self.csv_excel_loader.load_bytes(filename, content, metadata)
+        elif file_type == 'json':
+            return self.json_loader.load_bytes(content, metadata)
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
     
@@ -231,7 +259,12 @@ class UnifiedDocumentLoader:
         metadata: Optional[dict] = None,
         use_pymupdf: bool = True,
         password: Optional[str] = None,
-        max_pages: Optional[int] = None
+        max_pages: Optional[int] = None,
+        csv_row_based: Optional[bool] = None,
+        csv_intelligent_formatting: Optional[bool] = None,
+        json_loader_type: Optional[str] = None,
+        json_jq_schema: Optional[str] = None,
+        json_text_content: Optional[bool] = None
     ) -> List[Document]:
         """
         Load multiple files using appropriate loaders
@@ -240,15 +273,28 @@ class UnifiedDocumentLoader:
             file_paths: List of file paths
             metadata: Optional metadata to add
             use_pymupdf: For PDFs, use PyMuPDF if True
+            password: For encrypted PDFs, the password
+            max_pages: For large PDFs, max pages to load
+            csv_row_based: For CSV files, create one document per row
+            csv_intelligent_formatting: Use intelligent structured content format for CSV rows
+            json_loader_type: Type of JSON loader to use
+            json_jq_schema: jq query schema for JSONLoader
+            json_text_content: For JSONLoader, whether to extract text content
             
         Returns:
             List of Document objects from all files
         """
-        # Update CSV loader settings if needed
-        if csv_row_based != self.csv_excel_loader.row_based:
+        # Update loader settings if needed
+        if csv_row_based is not None and csv_row_based != self.csv_excel_loader.row_based:
             self.csv_excel_loader.row_based = csv_row_based
-        if csv_intelligent_formatting != self.csv_excel_loader.intelligent_formatting:
+        if csv_intelligent_formatting is not None and csv_intelligent_formatting != self.csv_excel_loader.intelligent_formatting:
             self.csv_excel_loader.intelligent_formatting = csv_intelligent_formatting
+        if json_loader_type is not None:
+            self.json_loader.loader_type = json_loader_type
+        if json_jq_schema is not None:
+            self.json_loader.jq_schema = json_jq_schema
+        if json_text_content is not None:
+            self.json_loader.text_content = json_text_content
         
         all_documents = []
         for file_path in file_paths:
@@ -286,4 +332,6 @@ class UnifiedDocumentLoader:
             '.csv': 'CSV (Comma-Separated Values) files',
             '.xlsx': 'Microsoft Excel files (Excel 2007+)',
             '.xls': 'Microsoft Excel files (Excel 97-2003)',
+            '.json': 'JSON (JavaScript Object Notation) files',
+            '.jsonl': 'JSON Lines files (one JSON object per line)',
         }

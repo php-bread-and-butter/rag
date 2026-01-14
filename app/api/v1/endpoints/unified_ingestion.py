@@ -4,10 +4,11 @@ Unified Document Ingestion API Endpoints
 Single endpoint that handles all file types automatically.
 """
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, UploadFile, File, status
+from fastapi import APIRouter, HTTPException, UploadFile, File, status, Form
 from pydantic import BaseModel, Field
 
 from app.rag.unified_loader import UnifiedDocumentLoader
+from app.rag.sql_loaders import SQLDocumentLoader
 from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -38,7 +39,20 @@ class FilesIngestRequest(BaseModel):
     word_loader_type: str = Field("python-docx", description="Word loader type: 'python-docx', 'docx2txt', or 'unstructured'")
     csv_row_based: bool = Field(False, description="For CSV files, create one document per row (instead of one document for entire file)")
     csv_intelligent_formatting: bool = Field(True, description="Use intelligent structured content format for CSV rows")
+    json_loader_type: str = Field("intelligent", description="JSON loader type: 'intelligent' (default), 'jsonloader', or 'jsonloader_jq'")
+    json_jq_schema: Optional[str] = Field(None, description="jq query schema for JSONLoader (e.g., '.employees[]' to extract each employee)")
+    json_text_content: bool = Field(False, description="For JSONLoader, whether to extract text content (False for full JSON objects)")
     metadata: Optional[dict] = Field(None, description="Optional metadata to attach to all documents", example={"source": "documents", "category": "tutorial"})
+
+
+class SQLIngestRequest(BaseModel):
+    """Request model for ingesting SQL databases"""
+    db_path: str = Field(..., description="Path to the SQLite database file", example="/path/to/company.db")
+    loader_type: str = Field("intelligent", description="SQL loader type: 'intelligent' (default), 'sqldatabase', or 'sqldatabaseloader'")
+    query: Optional[str] = Field(None, description="Optional SQL query to execute (for SQLDatabaseLoader)")
+    include_sample_rows: int = Field(5, description="Number of sample rows to include per table (for intelligent loader)")
+    include_relationships: bool = Field(True, description="Whether to create relationship documents from JOINs (for intelligent loader)")
+    metadata: Optional[dict] = Field(None, description="Optional metadata to attach to all documents", example={"source": "database", "category": "company_data"})
 
 
 class TextIngestRequest(BaseModel):
@@ -61,6 +75,7 @@ class TextIngestRequest(BaseModel):
     - `.docx` - Microsoft Word documents
     - `.csv` - CSV (Comma-Separated Values) files
     - `.xlsx`, `.xls` - Microsoft Excel files
+    - `.json`, `.jsonl` - JSON and JSON Lines files
     
     **PDF Issue Handling (automatic):**
     - Text cleaning (removes excessive whitespace, fixes ligatures)
@@ -117,11 +132,14 @@ class TextIngestRequest(BaseModel):
     }
 )
 async def upload_document(
-    file: UploadFile = File(..., description="File to upload (.txt, .text, .pdf, .docx, .csv, .xlsx, .xls)"),
-    use_pymupdf: bool = File(True, description="Use PyMuPDF for PDF processing (faster, better)"),
-    password: Optional[str] = File(None, description="Password for encrypted PDFs (if needed)"),
-    max_pages: Optional[int] = File(None, description="Maximum pages to process for large PDFs (None for all)"),
-    word_loader_type: str = File("python-docx", description="Word loader type: 'python-docx' (default), 'docx2txt', or 'unstructured'")
+    file: UploadFile = File(..., description="File to upload (.txt, .text, .pdf, .docx, .csv, .xlsx, .xls, .json, .jsonl)"),
+    use_pymupdf: bool = Form(True, description="Use PyMuPDF for PDF processing (faster, better)"),
+    password: Optional[str] = Form(None, description="Password for encrypted PDFs (if needed)"),
+    max_pages: Optional[int] = Form(None, description="Maximum pages to process for large PDFs (None for all)"),
+    word_loader_type: str = Form("python-docx", description="Word loader type: 'python-docx' (default), 'docx2txt', or 'unstructured'"),
+    json_loader_type: str = Form("intelligent", description="JSON loader type: 'intelligent' (default), 'jsonloader', or 'jsonloader_jq'"),
+    json_jq_schema: Optional[str] = Form(None, description="jq query schema for JSONLoader (e.g., '.employees[]')"),
+    json_text_content: bool = Form(False, description="For JSONLoader, whether to extract text content")
 ):
     logger.info(
         f"Document upload request | "
@@ -145,11 +163,21 @@ async def upload_document(
             "uploaded": True
         }
         
-        # Create loader instance with Word loader type if needed
+        # Create loader instance with custom settings if needed
         loader = unified_loader
-        if file_type == 'word' and word_loader_type != "python-docx":
+        needs_custom_loader = (
+            (file_type == 'word' and word_loader_type != "python-docx") or
+            (file_type == 'json' and (json_loader_type != "intelligent" or json_jq_schema is not None))
+        )
+        
+        if needs_custom_loader:
             from app.rag.unified_loader import UnifiedDocumentLoader
-            loader = UnifiedDocumentLoader(word_loader_type=word_loader_type)
+            loader = UnifiedDocumentLoader(
+                word_loader_type=word_loader_type,
+                json_loader_type=json_loader_type,
+                json_jq_schema=json_jq_schema,
+                json_text_content=json_text_content
+            )
         
         # Load document using unified loader (with PDF issue handling)
         documents = loader.load_bytes(
@@ -236,6 +264,7 @@ async def upload_document(
     - `.docx` - Microsoft Word documents
     - `.csv` - CSV (Comma-Separated Values) files
     - `.xlsx`, `.xls` - Microsoft Excel files
+    - `.json`, `.jsonl` - JSON and JSON Lines files
     
     The system automatically detects each file's type and processes accordingly.
     
@@ -253,12 +282,23 @@ async def ingest_files(request: FilesIngestRequest):
     try:
         # Create loader instance with custom settings if needed
         loader = unified_loader
-        if request.csv_row_based or not request.csv_intelligent_formatting:
+        needs_custom_loader = (
+            request.csv_row_based or 
+            not request.csv_intelligent_formatting or
+            request.word_loader_type != "python-docx" or
+            request.json_loader_type != "intelligent" or
+            request.json_jq_schema is not None
+        )
+        
+        if needs_custom_loader:
             from app.rag.unified_loader import UnifiedDocumentLoader
             loader = UnifiedDocumentLoader(
                 word_loader_type=request.word_loader_type,
                 csv_row_based=request.csv_row_based,
-                csv_intelligent_formatting=request.csv_intelligent_formatting
+                csv_intelligent_formatting=request.csv_intelligent_formatting,
+                json_loader_type=request.json_loader_type,
+                json_jq_schema=request.json_jq_schema,
+                json_text_content=request.json_text_content
             )
         
         documents = loader.load_files(
@@ -268,7 +308,10 @@ async def ingest_files(request: FilesIngestRequest):
             request.password,
             request.max_pages,
             request.csv_row_based,
-            request.csv_intelligent_formatting
+            request.csv_intelligent_formatting,
+            request.json_loader_type,
+            request.json_jq_schema,
+            request.json_text_content
         )
         
         total_chars = sum(len(doc.page_content) for doc in documents)
@@ -376,6 +419,102 @@ async def ingest_text(request: TextIngestRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error ingesting text: {str(e)}"
+        )
+
+
+@router.post(
+    "/sql",
+    response_model=DocumentIngestResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Ingest SQL database",
+    description="""
+    Ingest data from a SQLite database file.
+    
+    **Supported loader types:**
+    - **intelligent** (default): Creates documents for each table with schema, sample rows, and relationships
+    - **sqldatabase**: Uses SQLDatabase utility to extract table schema information
+    - **sqldatabaseloader**: Uses SQLDatabaseLoader to execute queries and extract data
+    
+    **Intelligent Loader Features:**
+    - Table schema extraction (columns, types, constraints)
+    - Sample row extraction (configurable number of rows)
+    - Relationship detection (JOINs between tables)
+    - Enhanced metadata (table names, record counts, etc.)
+    
+    **Example:**
+    ```json
+    {
+        "db_path": "/path/to/company.db",
+        "loader_type": "intelligent",
+        "include_sample_rows": 5,
+        "include_relationships": true
+    }
+    ```
+    """,
+    response_description="SQL database converted to Document objects"
+)
+async def ingest_sql_database(request: SQLIngestRequest):
+    logger.info(
+        f"SQL database ingestion request | "
+        f"Database: {request.db_path} | "
+        f"Loader: {request.loader_type}"
+    )
+    
+    try:
+        sql_loader = SQLDocumentLoader(
+            loader_type=request.loader_type,
+            include_sample_rows=request.include_sample_rows,
+            include_relationships=request.include_relationships
+        )
+        
+        documents = sql_loader.load_database(
+            request.db_path,
+            request.query,
+            request.metadata
+        )
+        
+        total_chars = sum(len(doc.page_content) for doc in documents)
+        
+        logger.info(
+            f"SQL database ingested successfully | "
+            f"Database: {request.db_path} | "
+            f"Documents: {len(documents)} | "
+            f"Total chars: {total_chars}"
+        )
+        
+        return DocumentIngestResponse(
+            message=f"SQL database {request.db_path} ingested successfully",
+            file_name=request.db_path,
+            file_type="sql",
+            documents_count=len(documents),
+            total_chars=total_chars,
+            documents=[
+                {
+                    "page_number": None,
+                    "content": doc.page_content[:500] + "..." if len(doc.page_content) > 500 else doc.page_content,
+                    "length": len(doc.page_content),
+                    "metadata": doc.metadata
+                }
+                for doc in documents
+            ]
+        )
+    except FileNotFoundError as e:
+        logger.warning(f"SQL database not found | Database: {request.db_path} | Error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"SQL database not found: {str(e)}"
+        )
+    except Exception as e:
+        logger.error(
+            f"Error ingesting SQL database | "
+            f"Database: {request.db_path} | "
+            f"Error: {type(e).__name__} | "
+            f"Message: {str(e)}",
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error ingesting SQL database: {str(e)}"
         )
 
 

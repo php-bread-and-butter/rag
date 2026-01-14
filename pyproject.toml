@@ -30,6 +30,10 @@ dependencies = [
     # Step 6: CSV and Excel File Parsing
     "pandas>=2.0.0",
     "openpyxl>=3.1.0",
+    # Step 7: JSON File Parsing
+    # (JSONLoader uses langchain-community, already included)
+    # Step 8: SQL Database Parsing
+    "sqlalchemy>=2.0.0",
 ]
 
 [project.optional-dependencies]
