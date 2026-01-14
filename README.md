@@ -67,6 +67,30 @@ source .venv/bin/activate  # macOS/Linux
 uv run python run.py
 ```
 
+### Environment Setup
+
+1. **Copy the sample environment file:**
+   ```bash
+   cp sample.env .env
+   ```
+
+2. **Edit `.env` and add your configuration:**
+   ```bash
+   # Required for OpenAI embeddings (optional - HuggingFace works without it)
+   OPENAI_API_KEY=your_openai_api_key_here
+   
+   # Optional: Logging configuration
+   LOG_LEVEL=INFO
+   LOG_FILE=
+   ```
+
+3. **Get OpenAI API Key (optional):**
+   - Visit https://platform.openai.com/api-keys
+   - Create a new API key
+   - Add it to your `.env` file
+
+**Note:** The `.env` file is already in `.gitignore` and won't be committed to version control. The `sample.env` file contains all available environment variables with descriptions.
+
 ### Run the Application
 
 ```bash

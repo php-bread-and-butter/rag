@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
     LOG_FILE: Optional[str] = None  # Path to log file (e.g., "logs/app.log"), None for console only
 
+    # OpenAI Configuration
+    OPENAI_API_KEY: Optional[str] = None  # OpenAI API key for embeddings
+
     class Config:
         env_file = ".env"
         case_sensitive = True

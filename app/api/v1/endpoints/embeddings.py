@@ -17,7 +17,9 @@ router = APIRouter()
 class EmbedQueryRequest(BaseModel):
     """Request model for embedding a single query"""
     text: str = Field(..., description="Text to embed", example="Hello, I am learning about embeddings!")
-    model_name: Optional[str] = Field("all-MiniLM-L6-v2", description="Name of the embedding model to use")
+    model_name: Optional[str] = Field("all-MiniLM-L6-v2", description="Name of the embedding model to use (HuggingFace or OpenAI)")
+    provider: Optional[str] = Field(None, description="Provider type: 'huggingface' or 'openai' (auto-detected if model_name is in available models)")
+    openai_api_key: Optional[str] = Field(None, description="OpenAI API key (required for OpenAI models if not set in env)")
 
 
 class EmbedDocumentsRequest(BaseModel):
@@ -27,14 +29,44 @@ class EmbedDocumentsRequest(BaseModel):
         "The dog played in the yard",
         "I love programming in Python"
     ])
-    model_name: Optional[str] = Field("all-MiniLM-L6-v2", description="Name of the embedding model to use")
+    model_name: Optional[str] = Field("all-MiniLM-L6-v2", description="Name of the embedding model to use (HuggingFace or OpenAI)")
+    provider: Optional[str] = Field(None, description="Provider type: 'huggingface' or 'openai' (auto-detected if model_name is in available models)")
+    openai_api_key: Optional[str] = Field(None, description="OpenAI API key (required for OpenAI models if not set in env)")
 
 
 class SimilarityRequest(BaseModel):
     """Request model for calculating similarity between two texts"""
     text1: str = Field(..., description="First text", example="The cat sat on the mat")
     text2: str = Field(..., description="Second text", example="The kitten sat on the mat")
-    model_name: Optional[str] = Field("all-MiniLM-L6-v2", description="Name of the embedding model to use")
+    model_name: Optional[str] = Field("all-MiniLM-L6-v2", description="Name of the embedding model to use (HuggingFace or OpenAI)")
+    provider: Optional[str] = Field(None, description="Provider type: 'huggingface' or 'openai' (auto-detected if model_name is in available models)")
+    openai_api_key: Optional[str] = Field(None, description="OpenAI API key (required for OpenAI models if not set in env)")
+
+
+class SemanticSearchRequest(BaseModel):
+    """Request model for semantic search"""
+    query: str = Field(..., description="Search query", example="What is Langchain?")
+    documents: List[str] = Field(..., description="List of documents to search through", example=[
+        "LangChain is a framework for developing applications powered by language models",
+        "Python is a high-level programming language",
+        "Machine learning is a subset of artificial intelligence"
+    ])
+    top_k: int = Field(3, ge=1, le=100, description="Number of top results to return")
+    model_name: Optional[str] = Field("all-MiniLM-L6-v2", description="Name of the embedding model to use (HuggingFace or OpenAI)")
+    provider: Optional[str] = Field(None, description="Provider type: 'huggingface' or 'openai' (auto-detected if model_name is in available models)")
+    openai_api_key: Optional[str] = Field(None, description="OpenAI API key (required for OpenAI models if not set in env)")
+
+
+class SemanticSearchResponse(BaseModel):
+    """Response model for semantic search"""
+    message: str = Field(..., example="Semantic search completed successfully")
+    query: str = Field(..., example="What is Langchain?")
+    results: List[dict] = Field(..., description="List of search results with similarity scores", example=[
+        {"score": 0.95, "document": "LangChain is a framework..."},
+        {"score": 0.72, "document": "Python is a high-level..."}
+    ])
+    model_name: str = Field(..., example="sentence-transformers/all-MiniLM-L6-v2")
+    provider: str = Field(..., example="huggingface")
 
 
 class EmbeddingResponse(BaseModel):
@@ -101,16 +133,20 @@ def _get_interpretation(similarity: float) -> str:
     response_description="Embedding vector for the input text"
 )
 async def embed_query(request: EmbedQueryRequest):
-    logger.info(f"Query embedding request | Text length: {len(request.text)} | Model: {request.model_name}")
+    logger.info(f"Query embedding request | Text length: {len(request.text)} | Model: {request.model_name} | Provider: {request.provider or 'auto'}")
     
     try:
         # Get or create embedding manager for the specified model
-        if request.model_name == "all-MiniLM-L6-v2":
+        if request.model_name == "all-MiniLM-L6-v2" and not request.provider and not request.openai_api_key:
             # Use default manager for default model
             embedding_manager = get_default_embedding_manager()
         else:
-            # Create new manager for custom model
-            embedding_manager = EmbeddingManager(model_name=request.model_name)
+            # Create new manager for custom model/provider
+            embedding_manager = EmbeddingManager(
+                model_name=request.model_name,
+                provider=request.provider,
+                openai_api_key=request.openai_api_key
+            )
         
         # Embed the text
         embedding = embedding_manager.embed_query(request.text)
@@ -129,6 +165,12 @@ async def embed_query(request: EmbedQueryRequest):
             embedding_size=len(embedding),
             embedding=embedding,
             embeddings=None
+        )
+    except ValueError as e:
+        logger.warning(f"Invalid input for embedding | Error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
         )
     except ValueError as e:
         logger.warning(f"Invalid input for embedding | Error: {str(e)}")
@@ -191,12 +233,16 @@ async def embed_documents(request: EmbedDocumentsRequest):
             raise ValueError("Texts list cannot be empty")
         
         # Get or create embedding manager for the specified model
-        if request.model_name == "all-MiniLM-L6-v2":
+        if request.model_name == "all-MiniLM-L6-v2" and not request.provider and not request.openai_api_key:
             # Use default manager for default model
             embedding_manager = get_default_embedding_manager()
         else:
-            # Create new manager for custom model
-            embedding_manager = EmbeddingManager(model_name=request.model_name)
+            # Create new manager for custom model/provider
+            embedding_manager = EmbeddingManager(
+                model_name=request.model_name,
+                provider=request.provider,
+                openai_api_key=request.openai_api_key
+            )
         
         # Embed the documents
         embeddings = embedding_manager.embed_documents(request.texts)
@@ -283,12 +329,16 @@ async def calculate_similarity(request: SimilarityRequest):
     
     try:
         # Get or create embedding manager for the specified model
-        if request.model_name == "all-MiniLM-L6-v2":
+        if request.model_name == "all-MiniLM-L6-v2" and not request.provider and not request.openai_api_key:
             # Use default manager for default model
             embedding_manager = get_default_embedding_manager()
         else:
-            # Create new manager for custom model
-            embedding_manager = EmbeddingManager(model_name=request.model_name)
+            # Create new manager for custom model/provider
+            embedding_manager = EmbeddingManager(
+                model_name=request.model_name,
+                provider=request.provider,
+                openai_api_key=request.openai_api_key
+            )
         
         # Calculate similarity
         similarity_score = embedding_manager.similarity(request.text1, request.text2)
@@ -327,30 +377,169 @@ async def calculate_similarity(request: SimilarityRequest):
         )
 
 
+@router.post(
+    "/search",
+    response_model=SemanticSearchResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Semantic search in documents",
+    description="""
+    Perform semantic search to find the most similar documents to a query.
+    
+    **How it works:**
+    1. Embeds the query and all documents
+    2. Calculates cosine similarity between query and each document
+    3. Returns top-k most similar documents sorted by similarity
+    
+    **Use cases:**
+    - Document retrieval
+    - Question answering systems
+    - Content recommendation
+    - Similarity-based search
+    
+    **Example:**
+    ```json
+    {
+        "query": "What is Langchain?",
+        "documents": [
+            "LangChain is a framework for developing applications powered by language models",
+            "Python is a high-level programming language",
+            "Machine learning is a subset of artificial intelligence"
+        ],
+        "top_k": 3,
+        "model_name": "all-MiniLM-L6-v2"
+    }
+    ```
+    
+    **Returns:**
+    - List of documents sorted by similarity score
+    - Similarity scores for each result
+    - Model information
+    """,
+    response_description="Search results with similarity scores"
+)
+async def semantic_search(request: SemanticSearchRequest):
+    logger.info(
+        f"Semantic search request | "
+        f"Query: {request.query[:50]}... | "
+        f"Documents: {len(request.documents)} | "
+        f"Top K: {request.top_k} | "
+        f"Model: {request.model_name}"
+    )
+    
+    try:
+        if not request.documents:
+            raise ValueError("Documents list cannot be empty")
+        
+        # Get or create embedding manager for the specified model
+        if request.model_name == "all-MiniLM-L6-v2" and not request.provider and not request.openai_api_key:
+            # Use default manager for default model
+            embedding_manager = get_default_embedding_manager()
+        else:
+            # Create new manager for custom model/provider
+            embedding_manager = EmbeddingManager(
+                model_name=request.model_name,
+                provider=request.provider,
+                openai_api_key=request.openai_api_key
+            )
+        
+        # Perform semantic search
+        results = embedding_manager.semantic_search(
+            query=request.query,
+            documents=request.documents,
+            top_k=request.top_k
+        )
+        
+        model_info = embedding_manager.get_model_info()
+        
+        # Format results
+        formatted_results = [
+            {
+                "score": float(score),
+                "document": doc,
+                "rank": idx + 1
+            }
+            for idx, (score, doc) in enumerate(results)
+        ]
+        
+        logger.info(
+            f"Semantic search completed successfully | "
+            f"Query: {request.query[:50]}... | "
+            f"Results: {len(formatted_results)} | "
+            f"Model: {model_info['model_name']}"
+        )
+        
+        return SemanticSearchResponse(
+            message=f"Semantic search completed successfully. Found {len(formatted_results)} result(s)",
+            query=request.query,
+            results=formatted_results,
+            model_name=model_info["model_name"],
+            provider=model_info["provider"]
+        )
+    except ValueError as e:
+        logger.warning(f"Invalid input for semantic search | Error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(
+            f"Error performing semantic search | Model: {request.model_name} | Error: {type(e).__name__} | Message: {str(e)}",
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error performing semantic search: {str(e)}"
+        )
+
+
 @router.get(
     "/models",
     status_code=status.HTTP_200_OK,
     summary="List available embedding models",
     description="""
-    Get information about all available embedding models.
+    Get information about all available embedding models from both HuggingFace and OpenAI.
     
     **Returns:**
     - Model names and keys
+    - Provider (HuggingFace or OpenAI)
     - Embedding dimensions
     - Descriptions and use cases
+    - Cost information (for OpenAI models)
     - Recommended applications
     """,
     response_description="Dictionary of available models with their specifications"
 )
-async def list_models():
-    """List all available embedding models"""
-    models = get_available_models()
+async def list_models(provider: Optional[str] = None):
+    """
+    List all available embedding models
     
-    logger.info(f"Retrieved {len(models)} available embedding models")
+    Args:
+        provider: Optional filter by provider ('huggingface' or 'openai')
+    """
+    from app.rag.embeddings import HUGGINGFACE_MODELS, OPENAI_MODELS
+    
+    if provider:
+        if provider.lower() == "huggingface":
+            models = HUGGINGFACE_MODELS.copy()
+        elif provider.lower() == "openai":
+            models = OPENAI_MODELS.copy()
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Provider must be 'huggingface' or 'openai'"
+            )
+    else:
+        models = get_available_models()
+    
+    logger.info(f"Retrieved {len(models)} available embedding models | Provider filter: {provider or 'all'}")
     
     return {
         "message": "Available embedding models retrieved successfully",
         "models": models,
         "default": "all-MiniLM-L6-v2",
-        "count": len(models)
+        "count": len(models),
+        "providers": {
+            "huggingface": len(HUGGINGFACE_MODELS),
+            "openai": len(OPENAI_MODELS)
+        }
     }
