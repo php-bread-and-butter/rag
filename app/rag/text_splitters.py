@@ -60,7 +60,7 @@ class TextSplitterManager:
             return RecursiveCharacterTextSplitter(
                 chunk_size=self.chunk_size,
                 chunk_overlap=self.chunk_overlap,
-                separators=["\n\n", "\n", " ", ""]
+                separators=["\n\n", "\n", " ", ""]  # Default separators, can be customized
             )
         elif self.splitter_type == "character":
             return CharacterTextSplitter(

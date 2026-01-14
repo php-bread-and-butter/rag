@@ -2,6 +2,10 @@
 Step 5: Word Document Loaders for Ingestion and Parsing
 
 This module provides Word document loaders for .docx files.
+Supports multiple loading strategies:
+- python-docx (direct parsing)
+- Docx2txtLoader (langchain, simple text extraction)
+- UnstructuredWordDocumentLoader (langchain, structured element extraction)
 """
 import os
 import tempfile
@@ -25,16 +29,27 @@ class WordDocumentLoader:
     - Section-based chunking
     """
     
-    def __init__(self, extract_tables: bool = True, extract_metadata: bool = True):
+    def __init__(
+        self,
+        extract_tables: bool = True,
+        extract_metadata: bool = True,
+        loader_type: str = "python-docx"
+    ):
         """
         Initialize the Word document loader
         
         Args:
-            extract_tables: Whether to extract text from tables
+            extract_tables: Whether to extract text from tables (python-docx only)
             extract_metadata: Whether to extract document metadata
+            loader_type: Type of loader to use ('python-docx', 'docx2txt', 'unstructured')
         """
         self.extract_tables = extract_tables
         self.extract_metadata = extract_metadata
+        self.loader_type = loader_type.lower()
+        
+        if self.loader_type not in ['python-docx', 'docx2txt', 'unstructured']:
+            logger.warning(f"Unknown loader_type '{loader_type}', defaulting to 'python-docx'")
+            self.loader_type = 'python-docx'
     
     def _extract_text_from_paragraphs(self, doc) -> str:
         """Extract text from all paragraphs in the document"""
@@ -98,8 +113,23 @@ class WordDocumentLoader:
             metadata: Optional metadata to add to documents
             
         Returns:
-            List of Document objects (typically one document, but can be split by sections)
+            List of Document objects (typically one document, but can be split by sections/elements)
         """
+        if not Path(file_path).exists():
+            raise FileNotFoundError(f"Word file not found: {file_path}")
+        
+        logger.debug(f"Loading Word file | Path: {file_path} | Loader: {self.loader_type}")
+        
+        # Route to appropriate loader based on loader_type
+        if self.loader_type == 'docx2txt':
+            return self._load_with_docx2txt(file_path, metadata)
+        elif self.loader_type == 'unstructured':
+            return self._load_with_unstructured(file_path, metadata)
+        else:  # python-docx (default)
+            return self._load_with_python_docx(file_path, metadata)
+    
+    def _load_with_python_docx(self, file_path: str, metadata: Optional[dict] = None) -> List[Document]:
+        """Load using python-docx (default method)"""
         try:
             from docx import Document as DocxDocument
         except ImportError:
@@ -107,11 +137,6 @@ class WordDocumentLoader:
                 "python-docx is required for Word document processing. "
                 "Install it with: pip install python-docx"
             )
-        
-        if not Path(file_path).exists():
-            raise FileNotFoundError(f"Word file not found: {file_path}")
-        
-        logger.debug(f"Loading Word file | Path: {file_path}")
         
         try:
             # Open Word document
@@ -148,12 +173,13 @@ class WordDocumentLoader:
             doc_metadata["char_count"] = len(full_text)
             doc_metadata["paragraph_count"] = len([p for p in docx_doc.paragraphs if p.text.strip()])
             doc_metadata["table_count"] = len(docx_doc.tables) if self.extract_tables else 0
+            doc_metadata["loader_type"] = "python-docx"
             
             # Create Document object
             document = Document(page_content=full_text, metadata=doc_metadata)
             
             logger.info(
-                f"Word document loaded successfully | "
+                f"Word document loaded successfully (python-docx) | "
                 f"File: {file_path} | "
                 f"Chars: {len(full_text)} | "
                 f"Paragraphs: {doc_metadata['paragraph_count']} | "
@@ -162,12 +188,88 @@ class WordDocumentLoader:
             
             return [document]
             
-        except ImportError:
-            raise
-        except FileNotFoundError:
-            raise
         except Exception as e:
-            logger.error(f"Error loading Word file | File: {file_path} | Error: {str(e)}", exc_info=True)
+            logger.error(f"Error loading Word file with python-docx | File: {file_path} | Error: {str(e)}", exc_info=True)
+            raise RuntimeError(f"Failed to load Word file '{file_path}': {str(e)}")
+    
+    def _load_with_docx2txt(self, file_path: str, metadata: Optional[dict] = None) -> List[Document]:
+        """Load using Docx2txtLoader from langchain_community"""
+        try:
+            from langchain_community.document_loaders import Docx2txtLoader
+        except ImportError:
+            raise ImportError(
+                "langchain-community is required for Docx2txtLoader. "
+                "Install it with: pip install langchain-community"
+            )
+        
+        try:
+            loader = Docx2txtLoader(file_path)
+            documents = loader.load()
+            
+            # Add custom metadata if provided
+            if metadata:
+                for doc in documents:
+                    doc.metadata.update(metadata)
+            
+            # Add file-specific metadata
+            for doc in documents:
+                doc.metadata["source_file"] = file_path
+                doc.metadata["file_type"] = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                doc.metadata["loader_type"] = "docx2txt"
+                if "char_count" not in doc.metadata:
+                    doc.metadata["char_count"] = len(doc.page_content)
+            
+            logger.info(
+                f"Word document loaded successfully (docx2txt) | "
+                f"File: {file_path} | "
+                f"Documents: {len(documents)}"
+            )
+            
+            return documents
+            
+        except Exception as e:
+            logger.error(f"Error loading Word file with docx2txt | File: {file_path} | Error: {str(e)}", exc_info=True)
+            raise RuntimeError(f"Failed to load Word file '{file_path}': {str(e)}")
+    
+    def _load_with_unstructured(self, file_path: str, metadata: Optional[dict] = None) -> List[Document]:
+        """Load using UnstructuredWordDocumentLoader from langchain_community"""
+        try:
+            from langchain_community.document_loaders import UnstructuredWordDocumentLoader
+        except ImportError:
+            raise ImportError(
+                "langchain-community is required for UnstructuredWordDocumentLoader. "
+                "Install it with: pip install langchain-community"
+            )
+        
+        try:
+            # Use 'elements' mode for structured extraction
+            loader = UnstructuredWordDocumentLoader(file_path, mode="elements")
+            documents = loader.load()
+            
+            # Add custom metadata if provided
+            if metadata:
+                for doc in documents:
+                    doc.metadata.update(metadata)
+            
+            # Add file-specific metadata
+            for doc in documents:
+                doc.metadata["source_file"] = file_path
+                doc.metadata["file_type"] = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                doc.metadata["loader_type"] = "unstructured"
+                if "char_count" not in doc.metadata:
+                    doc.metadata["char_count"] = len(doc.page_content)
+            
+            logger.info(
+                f"Word document loaded successfully (unstructured) | "
+                f"File: {file_path} | "
+                f"Elements: {len(documents)} | "
+                f"Element types: {set(doc.metadata.get('category', 'unknown') for doc in documents)}"
+            )
+            
+            return documents
+            
+        except Exception as e:
+            logger.error(f"Error loading Word file with unstructured | File: {file_path} | Error: {str(e)}", exc_info=True)
             raise RuntimeError(f"Failed to load Word file '{file_path}': {str(e)}")
     
     def load_bytes(self, docx_bytes: bytes, metadata: Optional[dict] = None) -> List[Document]:

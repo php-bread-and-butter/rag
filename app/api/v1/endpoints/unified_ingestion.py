@@ -13,7 +13,8 @@ from app.core.logging_config import get_logger
 logger = get_logger(__name__)
 router = APIRouter()
 
-# Initialize unified loader
+# Initialize unified loader (default configuration)
+# Can be customized per request for Word loader type
 unified_loader = UnifiedDocumentLoader()
 
 
@@ -34,6 +35,9 @@ class FilesIngestRequest(BaseModel):
     use_pymupdf: bool = Field(True, description="Use PyMuPDF for PDF processing (faster, better)")
     password: Optional[str] = Field(None, description="Password for encrypted PDFs (if needed)")
     max_pages: Optional[int] = Field(None, description="Maximum pages to process for large PDFs (None for all)")
+    word_loader_type: str = Field("python-docx", description="Word loader type: 'python-docx', 'docx2txt', or 'unstructured'")
+    csv_row_based: bool = Field(False, description="For CSV files, create one document per row (instead of one document for entire file)")
+    csv_intelligent_formatting: bool = Field(True, description="Use intelligent structured content format for CSV rows")
     metadata: Optional[dict] = Field(None, description="Optional metadata to attach to all documents", example={"source": "documents", "category": "tutorial"})
 
 
@@ -66,6 +70,11 @@ class TextIngestRequest(BaseModel):
     - Large file handling (with page limits)
     - Enhanced metadata (page numbers, char counts, etc.)
     
+    **Word Document Loaders:**
+    - `python-docx` (default): Direct parsing with python-docx, supports tables and metadata
+    - `docx2txt`: Simple text extraction using Docx2txtLoader
+    - `unstructured`: Structured element extraction using UnstructuredWordDocumentLoader (elements mode)
+    
     **How it works:**
     1. Upload a file (any supported type)
     2. System automatically detects the file type
@@ -74,7 +83,9 @@ class TextIngestRequest(BaseModel):
     
     **Example:**
     - Upload a PDF: Returns one Document per page (empty pages skipped)
+    - Upload a Word doc: Returns Document(s) based on loader type
     - Upload a TXT: Returns a single Document
+    - Upload Excel: Returns one Document per sheet
     """,
     response_description="Document ingestion result with page count and content preview",
     responses={
@@ -106,10 +117,11 @@ class TextIngestRequest(BaseModel):
     }
 )
 async def upload_document(
-    file: UploadFile = File(..., description="File to upload (.txt, .text, or .pdf)"),
+    file: UploadFile = File(..., description="File to upload (.txt, .text, .pdf, .docx, .csv, .xlsx, .xls)"),
     use_pymupdf: bool = File(True, description="Use PyMuPDF for PDF processing (faster, better)"),
     password: Optional[str] = File(None, description="Password for encrypted PDFs (if needed)"),
-    max_pages: Optional[int] = File(None, description="Maximum pages to process for large PDFs (None for all)")
+    max_pages: Optional[int] = File(None, description="Maximum pages to process for large PDFs (None for all)"),
+    word_loader_type: str = File("python-docx", description="Word loader type: 'python-docx' (default), 'docx2txt', or 'unstructured'")
 ):
     logger.info(
         f"Document upload request | "
@@ -133,8 +145,14 @@ async def upload_document(
             "uploaded": True
         }
         
+        # Create loader instance with Word loader type if needed
+        loader = unified_loader
+        if file_type == 'word' and word_loader_type != "python-docx":
+            from app.rag.unified_loader import UnifiedDocumentLoader
+            loader = UnifiedDocumentLoader(word_loader_type=word_loader_type)
+        
         # Load document using unified loader (with PDF issue handling)
-        documents = unified_loader.load_bytes(
+        documents = loader.load_bytes(
             filename=file.filename or "unknown",
             content=content,
             metadata=metadata,
@@ -233,12 +251,24 @@ async def ingest_files(request: FilesIngestRequest):
     )
     
     try:
-        documents = unified_loader.load_files(
+        # Create loader instance with custom settings if needed
+        loader = unified_loader
+        if request.csv_row_based or not request.csv_intelligent_formatting:
+            from app.rag.unified_loader import UnifiedDocumentLoader
+            loader = UnifiedDocumentLoader(
+                word_loader_type=request.word_loader_type,
+                csv_row_based=request.csv_row_based,
+                csv_intelligent_formatting=request.csv_intelligent_formatting
+            )
+        
+        documents = loader.load_files(
             request.file_paths,
             request.metadata,
             request.use_pymupdf,
             request.password,
-            request.max_pages
+            request.max_pages,
+            request.csv_row_based,
+            request.csv_intelligent_formatting
         )
         
         total_chars = sum(len(doc.page_content) for doc in documents)

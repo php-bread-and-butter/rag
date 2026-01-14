@@ -33,11 +33,27 @@ class UnifiedDocumentLoader:
         # Future: .json, etc.
     }
     
-    def __init__(self):
+    def __init__(
+        self,
+        word_loader_type: str = "python-docx",
+        csv_row_based: bool = False,
+        csv_intelligent_formatting: bool = True
+    ):
+        """
+        Initialize unified loader
+        
+        Args:
+            word_loader_type: Type of Word loader to use ('python-docx', 'docx2txt', 'unstructured')
+            csv_row_based: For CSV files, create one document per row
+            csv_intelligent_formatting: Use intelligent structured content format for CSV rows
+        """
         self.text_loader = TextDocumentLoader()
         self.pdf_loader = PDFDocumentLoader()
-        self.word_loader = WordDocumentLoader()
-        self.csv_excel_loader = CSVExcelLoader()
+        self.word_loader = WordDocumentLoader(loader_type=word_loader_type)
+        self.csv_excel_loader = CSVExcelLoader(
+            row_based=csv_row_based,
+            intelligent_formatting=csv_intelligent_formatting
+        )
     
     def detect_file_type(self, file_path: str) -> str:
         """
@@ -228,6 +244,12 @@ class UnifiedDocumentLoader:
         Returns:
             List of Document objects from all files
         """
+        # Update CSV loader settings if needed
+        if csv_row_based != self.csv_excel_loader.row_based:
+            self.csv_excel_loader.row_based = csv_row_based
+        if csv_intelligent_formatting != self.csv_excel_loader.intelligent_formatting:
+            self.csv_excel_loader.intelligent_formatting = csv_intelligent_formatting
+        
         all_documents = []
         for file_path in file_paths:
             documents = self.load_file(

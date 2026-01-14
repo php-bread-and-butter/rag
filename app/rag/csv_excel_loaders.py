@@ -2,6 +2,11 @@
 Step 6: CSV and Excel File Loaders for Ingestion and Parsing
 
 This module provides loaders for CSV and Excel files (.csv, .xlsx, .xls).
+Supports multiple loading strategies:
+- pandas-based processing (default)
+- CSVLoader from langchain_community (row-based)
+- UnstructuredCSVLoader (unstructured)
+- UnstructuredExcelLoader (unstructured)
 """
 import os
 import tempfile
@@ -19,19 +24,29 @@ class CSVExcelLoader:
     """
     Loader for CSV and Excel files
     
-    Supports:
+    Supports multiple loading strategies:
+    - 'pandas' (default): DataFrame-based processing with custom text representation
+    - 'csv_loader': Row-based documents using CSVLoader (one document per row)
+    - 'unstructured_csv': UnstructuredCSVLoader for complex CSV files
+    - 'unstructured_excel': UnstructuredExcelLoader for complex Excel files
+    
+    Features:
     - CSV files (.csv)
     - Excel files (.xlsx, .xls)
     - Multiple sheets in Excel files
     - Custom delimiters for CSV
-    - Header row detection
+    - Row-based or sheet-based document creation
+    - Intelligent structured content generation
     """
     
     def __init__(
         self,
         include_headers: bool = True,
         sheet_names: Optional[List[str]] = None,
-        delimiter: Optional[str] = None
+        delimiter: Optional[str] = None,
+        loader_type: str = "pandas",
+        row_based: bool = False,
+        intelligent_formatting: bool = True
     ):
         """
         Initialize the CSV/Excel loader
@@ -40,10 +55,20 @@ class CSVExcelLoader:
             include_headers: Whether to include column headers in text
             sheet_names: Specific sheet names to load (None for all sheets)
             delimiter: CSV delimiter (None for auto-detection)
+            loader_type: Type of loader ('pandas', 'csv_loader', 'unstructured_csv', 'unstructured_excel')
+            row_based: For CSV, create one document per row (pandas mode only)
+            intelligent_formatting: Use intelligent structured content format (pandas mode only)
         """
         self.include_headers = include_headers
         self.sheet_names = sheet_names
         self.delimiter = delimiter
+        self.loader_type = loader_type.lower()
+        self.row_based = row_based
+        self.intelligent_formatting = intelligent_formatting
+        
+        if self.loader_type not in ['pandas', 'csv_loader', 'unstructured_csv', 'unstructured_excel']:
+            logger.warning(f"Unknown loader_type '{loader_type}', defaulting to 'pandas'")
+            self.loader_type = 'pandas'
     
     def _dataframe_to_text(self, df: pd.DataFrame, sheet_name: Optional[str] = None) -> str:
         """
@@ -74,6 +99,27 @@ class CSVExcelLoader:
             text_parts.append(f"Row {idx + 1}: {row_text}")
         
         return "\n".join(text_parts)
+    
+    def _create_intelligent_row_content(self, row: pd.Series, columns: List[str]) -> str:
+        """
+        Create intelligent structured content for a single row
+        
+        Args:
+            row: pandas Series (single row)
+            columns: List of column names
+            
+        Returns:
+            Structured text content
+        """
+        content_parts = []
+        
+        # Create structured content
+        for col in columns:
+            value = row[col]
+            if pd.notna(value):
+                content_parts.append(f"{col}: {value}")
+        
+        return "\n".join(content_parts)
     
     def _create_metadata(
         self,
@@ -137,8 +183,18 @@ class CSVExcelLoader:
         if not Path(file_path).exists():
             raise FileNotFoundError(f"CSV file not found: {file_path}")
         
-        logger.debug(f"Loading CSV file | Path: {file_path}")
+        logger.debug(f"Loading CSV file | Path: {file_path} | Loader: {self.loader_type}")
         
+        # Route to appropriate loader
+        if self.loader_type == 'csv_loader':
+            return self._load_csv_with_csvloader(file_path, metadata)
+        elif self.loader_type == 'unstructured_csv':
+            return self._load_csv_with_unstructured(file_path, metadata)
+        else:  # pandas (default)
+            return self._load_csv_with_pandas(file_path, metadata)
+    
+    def _load_csv_with_pandas(self, file_path: str, metadata: Optional[dict] = None) -> List[Document]:
+        """Load CSV using pandas (default method)"""
         try:
             # Read CSV file
             df = pd.read_csv(file_path, delimiter=self.delimiter)
@@ -147,25 +203,63 @@ class CSVExcelLoader:
                 logger.warning(f"CSV file is empty | File: {file_path}")
                 raise ValueError("CSV file contains no data")
             
-            # Convert to text
-            text_content = self._dataframe_to_text(df)
+            # Row-based processing (one document per row)
+            if self.row_based:
+                documents = []
+                for idx, row in df.iterrows():
+                    if self.intelligent_formatting:
+                        # Create intelligent structured content
+                        content = self._create_intelligent_row_content(row, df.columns.tolist())
+                    else:
+                        # Simple row representation
+                        content = " | ".join(str(val) if pd.notna(val) else "" for val in row.values)
+                    
+                    # Create metadata for this row
+                    row_metadata = {
+                        "source_file": file_path,
+                        "file_type": "csv",
+                        "row_index": idx,
+                        "total_rows": len(df),
+                        "columns": df.columns.tolist(),
+                        "data_type": "csv_row"
+                    }
+                    
+                    # Add row values to metadata
+                    for col in df.columns:
+                        value = row[col]
+                        if pd.notna(value):
+                            row_metadata[f"row_{col.lower()}"] = str(value)
+                    
+                    if metadata:
+                        row_metadata.update(metadata)
+                    
+                    doc = Document(page_content=content, metadata=row_metadata)
+                    documents.append(doc)
+                
+                logger.info(
+                    f"CSV file loaded (row-based) | "
+                    f"File: {file_path} | "
+                    f"Rows: {len(documents)}"
+                )
+                return documents
             
-            # Create metadata
-            doc_metadata = self._create_metadata(file_path, df, file_type="csv")
-            if metadata:
-                doc_metadata.update(metadata)
-            
-            # Create Document
-            document = Document(page_content=text_content, metadata=doc_metadata)
-            
-            logger.info(
-                f"CSV file loaded successfully | "
-                f"File: {file_path} | "
-                f"Rows: {len(df)} | "
-                f"Columns: {len(df.columns)}"
-            )
-            
-            return [document]
+            # Sheet-based processing (one document for entire CSV)
+            else:
+                text_content = self._dataframe_to_text(df)
+                doc_metadata = self._create_metadata(file_path, df, file_type="csv")
+                if metadata:
+                    doc_metadata.update(metadata)
+                
+                document = Document(page_content=text_content, metadata=doc_metadata)
+                
+                logger.info(
+                    f"CSV file loaded successfully | "
+                    f"File: {file_path} | "
+                    f"Rows: {len(df)} | "
+                    f"Columns: {len(df.columns)}"
+                )
+                
+                return [document]
             
         except pd.errors.EmptyDataError:
             logger.error(f"CSV file is empty | File: {file_path}")
@@ -175,6 +269,88 @@ class CSVExcelLoader:
             raise ValueError(f"Failed to parse CSV file: {str(e)}")
         except Exception as e:
             logger.error(f"Error loading CSV file | File: {file_path} | Error: {str(e)}", exc_info=True)
+            raise RuntimeError(f"Failed to load CSV file '{file_path}': {str(e)}")
+    
+    def _load_csv_with_csvloader(self, file_path: str, metadata: Optional[dict] = None) -> List[Document]:
+        """Load CSV using CSVLoader from langchain_community (row-based)"""
+        try:
+            from langchain_community.document_loaders import CSVLoader
+        except ImportError:
+            raise ImportError(
+                "langchain-community is required for CSVLoader. "
+                "Install it with: pip install langchain-community"
+            )
+        
+        try:
+            csv_args = {}
+            if self.delimiter:
+                csv_args['delimiter'] = self.delimiter
+            
+            loader = CSVLoader(
+                file_path=file_path,
+                encoding='utf-8',
+                csv_args=csv_args
+            )
+            documents = loader.load()
+            
+            # Add custom metadata if provided
+            if metadata:
+                for doc in documents:
+                    doc.metadata.update(metadata)
+            
+            # Add file-specific metadata
+            for doc in documents:
+                doc.metadata["source_file"] = file_path
+                doc.metadata["file_type"] = "csv"
+                doc.metadata["loader_type"] = "csv_loader"
+            
+            logger.info(
+                f"CSV file loaded (CSVLoader) | "
+                f"File: {file_path} | "
+                f"Documents: {len(documents)}"
+            )
+            
+            return documents
+            
+        except Exception as e:
+            logger.error(f"Error loading CSV with CSVLoader | File: {file_path} | Error: {str(e)}", exc_info=True)
+            raise RuntimeError(f"Failed to load CSV file '{file_path}': {str(e)}")
+    
+    def _load_csv_with_unstructured(self, file_path: str, metadata: Optional[dict] = None) -> List[Document]:
+        """Load CSV using UnstructuredCSVLoader"""
+        try:
+            from langchain_community.document_loaders import UnstructuredCSVLoader
+        except ImportError:
+            raise ImportError(
+                "langchain-community is required for UnstructuredCSVLoader. "
+                "Install it with: pip install langchain-community"
+            )
+        
+        try:
+            loader = UnstructuredCSVLoader(file_path, mode="elements")
+            documents = loader.load()
+            
+            # Add custom metadata if provided
+            if metadata:
+                for doc in documents:
+                    doc.metadata.update(metadata)
+            
+            # Add file-specific metadata
+            for doc in documents:
+                doc.metadata["source_file"] = file_path
+                doc.metadata["file_type"] = "csv"
+                doc.metadata["loader_type"] = "unstructured_csv"
+            
+            logger.info(
+                f"CSV file loaded (UnstructuredCSVLoader) | "
+                f"File: {file_path} | "
+                f"Elements: {len(documents)}"
+            )
+            
+            return documents
+            
+        except Exception as e:
+            logger.error(f"Error loading CSV with UnstructuredCSVLoader | File: {file_path} | Error: {str(e)}", exc_info=True)
             raise RuntimeError(f"Failed to load CSV file '{file_path}': {str(e)}")
     
     def load_excel_file(
@@ -195,8 +371,16 @@ class CSVExcelLoader:
         if not Path(file_path).exists():
             raise FileNotFoundError(f"Excel file not found: {file_path}")
         
-        logger.debug(f"Loading Excel file | Path: {file_path}")
+        logger.debug(f"Loading Excel file | Path: {file_path} | Loader: {self.loader_type}")
         
+        # Route to appropriate loader
+        if self.loader_type == 'unstructured_excel':
+            return self._load_excel_with_unstructured(file_path, metadata)
+        else:  # pandas (default)
+            return self._load_excel_with_pandas(file_path, metadata)
+    
+    def _load_excel_with_pandas(self, file_path: str, metadata: Optional[dict] = None) -> List[Document]:
+        """Load Excel using pandas (default method)"""
         try:
             # Read Excel file
             excel_file = pd.ExcelFile(file_path)
@@ -222,8 +406,14 @@ class CSVExcelLoader:
                     logger.debug(f"Sheet '{sheet_name}' is empty | File: {file_path}")
                     continue
                 
-                # Convert to text
-                text_content = self._dataframe_to_text(df, sheet_name=sheet_name)
+                # Create sheet content with better formatting
+                if self.intelligent_formatting:
+                    sheet_content = f"Sheet: {sheet_name}\n"
+                    sheet_content += f"Columns: {', '.join(df.columns)}\n"
+                    sheet_content += f"Rows: {len(df)}\n\n"
+                    sheet_content += df.to_string(index=False)
+                else:
+                    sheet_content = self._dataframe_to_text(df, sheet_name=sheet_name)
                 
                 # Create metadata
                 doc_metadata = self._create_metadata(
@@ -234,12 +424,14 @@ class CSVExcelLoader:
                 )
                 doc_metadata["total_sheets"] = len(excel_file.sheet_names)
                 doc_metadata["sheet_index"] = excel_file.sheet_names.index(sheet_name) + 1
+                doc_metadata["data_type"] = "excel_sheet"
+                doc_metadata["loader_type"] = "pandas"
                 
                 if metadata:
                     doc_metadata.update(metadata)
                 
                 # Create Document
-                document = Document(page_content=text_content, metadata=doc_metadata)
+                document = Document(page_content=sheet_content, metadata=doc_metadata)
                 documents.append(document)
                 
                 logger.debug(
@@ -268,6 +460,43 @@ class CSVExcelLoader:
             raise
         except Exception as e:
             logger.error(f"Error loading Excel file | File: {file_path} | Error: {str(e)}", exc_info=True)
+            raise RuntimeError(f"Failed to load Excel file '{file_path}': {str(e)}")
+    
+    def _load_excel_with_unstructured(self, file_path: str, metadata: Optional[dict] = None) -> List[Document]:
+        """Load Excel using UnstructuredExcelLoader"""
+        try:
+            from langchain_community.document_loaders import UnstructuredExcelLoader
+        except ImportError:
+            raise ImportError(
+                "langchain-community is required for UnstructuredExcelLoader. "
+                "Install it with: pip install langchain-community"
+            )
+        
+        try:
+            loader = UnstructuredExcelLoader(file_path, mode="elements")
+            documents = loader.load()
+            
+            # Add custom metadata if provided
+            if metadata:
+                for doc in documents:
+                    doc.metadata.update(metadata)
+            
+            # Add file-specific metadata
+            for doc in documents:
+                doc.metadata["source_file"] = file_path
+                doc.metadata["file_type"] = "xlsx" if file_path.endswith('.xlsx') else "xls"
+                doc.metadata["loader_type"] = "unstructured_excel"
+            
+            logger.info(
+                f"Excel file loaded (UnstructuredExcelLoader) | "
+                f"File: {file_path} | "
+                f"Elements: {len(documents)}"
+            )
+            
+            return documents
+            
+        except Exception as e:
+            logger.error(f"Error loading Excel with UnstructuredExcelLoader | File: {file_path} | Error: {str(e)}", exc_info=True)
             raise RuntimeError(f"Failed to load Excel file '{file_path}': {str(e)}")
     
     def load_file(self, file_path: str, metadata: Optional[dict] = None) -> List[Document]:
