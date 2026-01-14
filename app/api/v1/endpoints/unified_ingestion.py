@@ -5,7 +5,7 @@ Single endpoint that handles all file types automatically.
 """
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.rag.unified_loader import UnifiedDocumentLoader
 from app.core.logging_config import get_logger
@@ -30,31 +30,72 @@ class DocumentIngestResponse(BaseModel):
 
 class FilesIngestRequest(BaseModel):
     """Request model for ingesting files from paths"""
-    file_paths: List[str]
-    use_pymupdf: bool = True
-    metadata: Optional[dict] = None
+    file_paths: List[str] = Field(..., description="List of file paths on the server", example=["/path/to/file1.pdf", "/path/to/file2.txt"])
+    use_pymupdf: bool = Field(True, description="Use PyMuPDF for PDF processing (faster, better)")
+    metadata: Optional[dict] = Field(None, description="Optional metadata to attach to all documents", example={"source": "documents", "category": "tutorial"})
 
 
 class TextIngestRequest(BaseModel):
     """Request model for raw text ingestion"""
-    text: str
-    metadata: Optional[dict] = None
+    text: str = Field(..., description="Raw text content to ingest", example="This is sample text to ingest into the system.")
+    metadata: Optional[dict] = Field(None, description="Optional metadata for the text", example={"source": "api", "type": "user_input"})
 
 
-@router.post("/upload", response_model=DocumentIngestResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/upload",
+    response_model=DocumentIngestResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload and ingest a document",
+    description="""
+    Upload and ingest a document with automatic file type detection.
+    
+    **Supported file types:**
+    - `.txt`, `.text` - Plain text files
+    - `.pdf` - PDF documents
+    
+    **How it works:**
+    1. Upload a file (any supported type)
+    2. System automatically detects the file type
+    3. Uses appropriate processor (text loader or PDF loader)
+    4. Returns processed documents with metadata
+    
+    **Example:**
+    - Upload a PDF: Returns one Document per page
+    - Upload a TXT: Returns a single Document
+    """,
+    response_description="Document ingestion result with page count and content preview",
+    responses={
+        201: {
+            "description": "Document ingested successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "message": "Document example.pdf ingested successfully",
+                        "file_name": "example.pdf",
+                        "file_type": "pdf",
+                        "documents_count": 5,
+                        "total_chars": 12345,
+                        "pages": 5,
+                        "documents": [
+                            {
+                                "page_number": 1,
+                                "content": "First 500 characters of page content...",
+                                "length": 1234,
+                                "metadata": {"source": "example.pdf", "page": 0}
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+        400: {"description": "Invalid file type or encoding error"},
+        500: {"description": "Internal server error"}
+    }
+)
 async def upload_document(
-    file: UploadFile = File(...),
-    use_pymupdf: bool = True
+    file: UploadFile = File(..., description="File to upload (.txt, .text, or .pdf)"),
+    use_pymupdf: bool = File(True, description="Use PyMuPDF for PDF processing (faster, better)")
 ):
-    """
-    Upload and ingest a document (automatically detects file type)
-    
-    Supported file types:
-    - .txt, .text - Text files
-    - .pdf - PDF documents
-    
-    The system automatically detects the file type and uses the appropriate processor.
-    """
     logger.info(
         f"Document upload request | "
         f"Filename: {file.filename} | "
@@ -144,17 +185,25 @@ async def upload_document(
         )
 
 
-@router.post("/files", response_model=DocumentIngestResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/files",
+    response_model=DocumentIngestResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Ingest multiple files from server paths",
+    description="""
+    Ingest multiple files from file paths on the server.
+    
+    **Note:** Files must be accessible from the server's filesystem.
+    
+    **Supported file types:**
+    - `.txt`, `.text` - Plain text files
+    - `.pdf` - PDF documents
+    
+    The system automatically detects each file's type and processes accordingly.
+    """,
+    response_description="Combined result from all ingested files"
+)
 async def ingest_files(request: FilesIngestRequest):
-    """
-    Ingest multiple files from file paths (automatically detects file types)
-    
-    Supported file types:
-    - .txt, .text - Text files
-    - .pdf - PDF documents
-    
-    The system automatically detects each file's type and uses the appropriate processor.
-    """
     logger.info(
         f"Files ingestion request | "
         f"Count: {len(request.file_paths)} | "
@@ -219,13 +268,27 @@ async def ingest_files(request: FilesIngestRequest):
         )
 
 
-@router.post("/text", response_model=DocumentIngestResponse, status_code=status.HTTP_201_CREATED)
-async def ingest_text(request: TextIngestRequest):
-    """
-    Ingest raw text data
+@router.post(
+    "/text",
+    response_model=DocumentIngestResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Ingest raw text",
+    description="""
+    Ingest raw text data directly without a file.
     
-    This endpoint accepts raw text and converts it into a Document object.
-    """
+    **Use case:** When you have text content in memory and want to process it.
+    
+    **Example:**
+    ```json
+    {
+        "text": "Your text content here...",
+        "metadata": {"source": "api", "type": "user_input"}
+    }
+    ```
+    """,
+    response_description="Text converted to Document object"
+)
+async def ingest_text(request: TextIngestRequest):
     logger.info(f"Text ingestion request | Text length: {len(request.text)} chars")
     
     try:
@@ -262,11 +325,19 @@ async def ingest_text(request: TextIngestRequest):
         )
 
 
-@router.get("/supported-types", status_code=status.HTTP_200_OK)
+@router.get(
+    "/supported-types",
+    status_code=status.HTTP_200_OK,
+    summary="Get supported file types",
+    description="""
+    Get a list of all supported file types and their descriptions.
+    
+    Returns information about which file extensions are supported
+    and what each type is used for.
+    """,
+    response_description="List of supported file types and descriptions"
+)
 async def get_supported_types():
-    """
-    Get list of supported file types
-    """
     supported_types = unified_loader.get_supported_types()
     
     type_descriptions = {

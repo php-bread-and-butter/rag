@@ -45,18 +45,28 @@ class SplitResponse(BaseModel):
     chunk_overlap: int
 
 
-@router.post("/text/split", response_model=SplitResponse, status_code=status.HTTP_200_OK)
-async def split_text(request: TextSplitRequest):
-    """
-    Split text into chunks using various splitting techniques
+@router.post(
+    "/text/split",
+    response_model=SplitResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Split text into chunks",
+    description="""
+    Split text into chunks using various splitting techniques.
     
-    Supported splitter types:
-    - recursive: RecursiveCharacterTextSplitter (recommended, handles most text well)
-    - character: CharacterTextSplitter (simple character-based splitting)
-    - token: TokenTextSplitter (token-based splitting using tiktoken)
-    - markdown: MarkdownTextSplitter (preserves markdown structure)
-    - python: PythonCodeTextSplitter (for Python code)
-    """
+    **Supported splitter types:**
+    - **recursive** (recommended): RecursiveCharacterTextSplitter - Handles most text well, splits on multiple separators
+    - **character**: CharacterTextSplitter - Simple character-based splitting
+    - **token**: TokenTextSplitter - Token-based splitting using tiktoken (useful for LLM context windows)
+    - **markdown**: MarkdownTextSplitter - Preserves markdown structure
+    - **python**: PythonCodeTextSplitter - For Python source code
+    
+    **Parameters:**
+    - `chunk_size`: Maximum size of each chunk (characters or tokens)
+    - `chunk_overlap`: Overlap between chunks to maintain context
+    """,
+    response_description="Text split into chunks with metadata"
+)
+async def split_text(request: TextSplitRequest):
     logger.info(
         f"Text split request | "
         f"Text length: {len(request.text)} | "
@@ -189,11 +199,21 @@ async def split_documents(request: DocumentSplitRequest):
         )
 
 
-@router.get("/splitters", status_code=status.HTTP_200_OK)
+@router.get(
+    "/splitters",
+    status_code=status.HTTP_200_OK,
+    summary="List available text splitters",
+    description="""
+    Get information about all available text splitter types.
+    
+    Returns detailed descriptions of each splitter type, including:
+    - Name and description
+    - Best use cases
+    - When to use each splitter
+    """,
+    response_description="List of available splitters with descriptions"
+)
 async def list_splitters():
-    """
-    List available text splitter types and their descriptions
-    """
     splitters = {
         "recursive": {
             "name": "RecursiveCharacterTextSplitter",
