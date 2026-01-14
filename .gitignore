@@ -49,6 +49,13 @@ venv.bak/
 *.sqlite
 *.sqlite3
 
+# Vector Store (ChromaDB)
+chroma_db/
+*.chroma
+
+# File Storage (Local)
+storage/
+
 # Logs
 *.log
 logs/

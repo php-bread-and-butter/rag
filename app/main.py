@@ -57,7 +57,15 @@ app = FastAPI(
         },
         {
             "name": "Embeddings",
-            "description": "Generate text embeddings using HuggingFace models. Supports single queries, batch documents, and similarity calculations.",
+            "description": "Generate text embeddings using HuggingFace and OpenAI models. Supports single queries, batch documents, and similarity calculations.",
+        },
+        {
+            "name": "RAG Training (Legacy)",
+            "description": "Legacy RAG training endpoints. Use RAG Training V2 for new implementations.",
+        },
+        {
+            "name": "RAG Training V2",
+            "description": "Unified RAG training system with S3/local file storage and ChromaDB vector storage. Supports multiple input types: files, S3, SQL, text. Stores raw files separately from vectors.",
         },
     ],
 )

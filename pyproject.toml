@@ -38,6 +38,11 @@ dependencies = [
     "langchain-huggingface>=0.0.1",
     "langchain-openai>=0.0.1",
     "numpy>=1.24.0",
+    # Vector Store
+    "chromadb>=0.4.0",
+    "langchain-chroma>=0.1.0",
+    # File Storage (S3)
+    "boto3>=1.28.0",
 ]
 
 [project.optional-dependencies]
