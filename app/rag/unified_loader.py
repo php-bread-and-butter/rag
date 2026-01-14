@@ -11,6 +11,7 @@ from langchain_core.documents import Document
 from app.rag.document_loaders import TextDocumentLoader
 from app.rag.pdf_loaders import PDFDocumentLoader
 from app.rag.word_loaders import WordDocumentLoader
+from app.rag.csv_excel_loaders import CSVExcelLoader
 from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -26,13 +27,17 @@ class UnifiedDocumentLoader:
         '.text': 'text',
         '.pdf': 'pdf',
         '.docx': 'word',
-        # Future: .csv, .xlsx, .json, etc.
+        '.csv': 'csv',
+        '.xlsx': 'excel',
+        '.xls': 'excel',
+        # Future: .json, etc.
     }
     
     def __init__(self):
         self.text_loader = TextDocumentLoader()
         self.pdf_loader = PDFDocumentLoader()
         self.word_loader = WordDocumentLoader()
+        self.csv_excel_loader = CSVExcelLoader()
     
     def detect_file_type(self, file_path: str) -> str:
         """
@@ -57,6 +62,11 @@ class UnifiedDocumentLoader:
                     return 'pdf'
                 elif mime_type == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
                     return 'word'
+                elif mime_type == 'text/csv' or mime_type == 'application/csv':
+                    return 'csv'
+                elif mime_type in ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                                   'application/vnd.ms-excel']:
+                    return 'excel'
         
         if not file_type:
             raise ValueError(
@@ -94,14 +104,17 @@ class UnifiedDocumentLoader:
             if content.startswith(b'%PDF'):
                 return 'pdf'
             elif content.startswith(b'PK'):  # ZIP-based formats (.docx, .xlsx, etc.)
-                # Check if it's a Word document by looking for specific structure
-                # This is a simple heuristic - .docx files are ZIP archives
+                # Check ZIP structure to determine file type
                 try:
                     import zipfile
                     import io
                     zip_file = zipfile.ZipFile(io.BytesIO(content))
-                    if 'word/document.xml' in zip_file.namelist():
+                    file_list = zip_file.namelist()
+                    
+                    if 'word/document.xml' in file_list:
                         return 'word'
+                    elif 'xl/workbook.xml' in file_list or 'xl/sharedStrings.xml' in file_list:
+                        return 'excel'
                 except Exception:
                     pass
             # Try to decode as text
@@ -150,6 +163,8 @@ class UnifiedDocumentLoader:
             return self.pdf_loader.load_file(file_path, metadata)
         elif file_type == 'word':
             return self.word_loader.load_file(file_path, metadata)
+        elif file_type in ['csv', 'excel']:
+            return self.csv_excel_loader.load_file(file_path, metadata)
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
     
@@ -189,6 +204,8 @@ class UnifiedDocumentLoader:
             return self.pdf_loader.load_bytes(content, metadata)
         elif file_type == 'word':
             return self.word_loader.load_bytes(content, metadata)
+        elif file_type in ['csv', 'excel']:
+            return self.csv_excel_loader.load_bytes(filename, content, metadata)
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
     
@@ -244,4 +261,7 @@ class UnifiedDocumentLoader:
             '.text': 'Plain text files',
             '.pdf': 'PDF documents',
             '.docx': 'Microsoft Word documents',
+            '.csv': 'CSV (Comma-Separated Values) files',
+            '.xlsx': 'Microsoft Excel files (Excel 2007+)',
+            '.xls': 'Microsoft Excel files (Excel 97-2003)',
         }

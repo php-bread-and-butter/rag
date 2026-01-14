@@ -55,6 +55,8 @@ class TextIngestRequest(BaseModel):
     - `.txt`, `.text` - Plain text files
     - `.pdf` - PDF documents (with automatic issue handling)
     - `.docx` - Microsoft Word documents
+    - `.csv` - CSV (Comma-Separated Values) files
+    - `.xlsx`, `.xls` - Microsoft Excel files
     
     **PDF Issue Handling (automatic):**
     - Text cleaning (removes excessive whitespace, fixes ligatures)
@@ -214,8 +216,12 @@ async def upload_document(
     - `.txt`, `.text` - Plain text files
     - `.pdf` - PDF documents
     - `.docx` - Microsoft Word documents
+    - `.csv` - CSV (Comma-Separated Values) files
+    - `.xlsx`, `.xls` - Microsoft Excel files
     
     The system automatically detects each file's type and processes accordingly.
+    
+    **Note:** Excel files with multiple sheets will create one Document per sheet.
     """,
     response_description="Combined result from all ingested files"
 )

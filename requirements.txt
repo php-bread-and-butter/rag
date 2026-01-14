@@ -21,6 +21,10 @@ pymupdf>=1.23.0
 # Step 5: Word Document Ingestion
 python-docx>=1.1.0
 
+# Step 6: CSV and Excel File Parsing
+pandas>=2.0.0
+openpyxl>=3.1.0
+
 # Development
 pytest==7.4.3
 pytest-asyncio==0.21.1
