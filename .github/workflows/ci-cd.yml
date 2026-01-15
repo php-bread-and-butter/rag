@@ -1,0 +1,88 @@
+name: Build & Deploy (FastAPI)
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    environment: ${{ github.ref_name == 'main' && 'Prod' || 'Develop' }}
+
+    steps:
+      # 1. Checkout
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. Setup Python (must match prod!)
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 3. Install uv
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      # 4. Build virtualenv (NO DEV DEPS)
+      - name: Build production venv
+        run: |
+          uv sync --no-dev
+          uv pip list
+
+      # 5. Tar the venv
+      - name: Package virtualenv
+        run: |
+          tar czf venv.tar.gz .venv
+
+      # 6. Setup SSH
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p ${{ secrets.DEPLOY_PORT }} \
+            ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts
+
+      # 7. Rsync app + venv
+      - name: Deploy app + venv
+        run: |
+          rsync -avz -e "ssh -p ${{ secrets.DEPLOY_PORT }}" --delete \
+            --exclude .git \
+            --exclude .github \
+            --exclude tests \
+            --exclude .env \
+            ./ \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ vars.DEPLOY_PATH }}/
+
+          rsync -avz -e "ssh -p ${{ secrets.DEPLOY_PORT }}" \
+            venv.tar.gz \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ vars.DEPLOY_PATH }}/
+
+      # 8. Activate venv on server
+      - name: Activate venv on server
+        run: |
+          ssh -p ${{ secrets.DEPLOY_PORT }} \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} << 'EOF'
+            set -e
+            cd "${{ vars.DEPLOY_PATH }}"
+
+            rm -rf .venv
+            tar xzf venv.tar.gz
+            rm venv.tar.gz
+
+            .venv/bin/python --version
+            .venv/bin/pip list
+          EOF
+
+      # 9. Restart service
+      - name: Restart FastAPI service
+        run: |
+          ssh -p ${{ secrets.DEPLOY_PORT }} \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
+            "sudo systemctl restart rag-api"
