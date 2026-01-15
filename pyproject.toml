@@ -85,3 +85,4 @@ asyncio_mode = "auto"
 [tool.uv]
 index-url = "https://pypi.org/simple"
 extra-index-url = ["https://download.pytorch.org/whl/cpu"]
+no-build = true
