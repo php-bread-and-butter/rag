@@ -1,19 +1,14 @@
 [project]
-name = "fastapi-tutorial"
+name = "rag-api"
 version = "0.1.0"
 description = "A simple FastAPI tutorial project"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.13"
 dependencies = [
     "fastapi==0.104.1",
     "uvicorn[standard]==0.24.0",
     "pydantic-settings==2.1.0",
     "python-multipart==0.0.6",
-    "pytest==7.4.3",
-    "pytest-asyncio==0.21.1",
-    "httpx==0.25.2",
-    "black==23.11.0",
-    "flake8==6.1.0",
     # Step 1: Text Data Ingestion
     "langchain>=0.1.0",
     "langchain-community>=0.0.10",
@@ -45,9 +40,21 @@ dependencies = [
     "langchain-chroma>=0.1.0",
     # File Storage (S3)
     "boto3>=1.28.0",
+    "gunicorn",
+    "torch==2.2.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "torch==2.2.2+cpu; sys_platform != 'darwin'",
 ]
 
 [project.optional-dependencies]
+dev = [
+    "pytest==7.4.3",
+    "pytest-asyncio==0.21.1",
+    "httpx==0.25.2",
+    "black==23.11.0",
+    "flake8==6.1.0",
+]
+
+[dependency-groups]
 dev = [
     "pytest==7.4.3",
     "pytest-asyncio==0.21.1",
@@ -74,9 +81,7 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
-[tool.uv.dependencies]
-torch = { version = "2.2.2", source = "pytorch-cpu" }
 
-[[tool.uv.sources]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
+[tool.uv]
+index-url = "https://pypi.org/simple"
+extra-index-url = ["https://download.pytorch.org/whl/cpu"]
