@@ -40,16 +40,7 @@ jobs:
         run: |
           tar czf venv.tar.gz .venv
 
-      # 6. Setup SSH
-      - name: Setup SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -p ${{ secrets.DEPLOY_PORT }} \
-            ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts
-
-      # 7. Rsync app + venv
+      # 6. Rsync app + venv
       - name: Deploy app + venv
         run: |
           rsync -avz -e "ssh -p ${{ secrets.DEPLOY_PORT }}" --delete \
