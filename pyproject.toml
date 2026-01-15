@@ -74,3 +74,9 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+[tool.uv.dependencies]
+torch = { version = "2.2.2", source = "pytorch-cpu" }
+
+[[tool.uv.sources]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
