@@ -18,7 +18,10 @@ class Settings(BaseSettings):
     LOG_FILE: Optional[str] = None  # Path to log file (e.g., "logs/app.log"), None for console only
 
     # OpenAI Configuration
-    OPENAI_API_KEY: Optional[str] = None  # OpenAI API key for embeddings
+    OPENAI_API_KEY: Optional[str] = None  # OpenAI API key for embeddings and LLM
+
+    # GROQ Configuration
+    GROQ_API_KEY: Optional[str] = None  # GROQ API key for LLM
 
     # ChromaDB Configuration
     CHROMA_DB_PATH: Optional[str] = None  # Path to ChromaDB persistence directory (default: ./chroma_db)

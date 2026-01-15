@@ -5,7 +5,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import traceback
 
-from app.api.v1.api import api_router
+from app.api.v1.api import api_router as api_router_v1
+from app.api.v2.api import api_router as api_router_v2
 from app.core.config import settings
 from app.core.logging_config import setup_logging, get_logger
 
@@ -21,23 +22,26 @@ app = FastAPI(
     
     A step-by-step tutorial project for building a RAG (Retrieval-Augmented Generation) system.
     
+    ### API Versions
+    
+    * **V1** (`/api/v1/*`) - Legacy endpoints for ingestion, splitting, embeddings
+    * **V2** (`/api/v2/*`) - Unified RAG training and LLM-powered queries
+    
     ### Features
     
-    * **Document Ingestion** - Upload and process various file types (TXT, PDF)
+    * **Document Ingestion** - Upload and process various file types
     * **Text Splitting** - Split documents into chunks using multiple strategies
-    * **Automatic File Type Detection** - System automatically detects and processes file types
-    
-    ### API Endpoints
-    
-    * `/api/v1/documents/*` - Document ingestion endpoints
-    * `/api/v1/splitting/*` - Text splitting endpoints
+    * **Embeddings** - Generate embeddings using HuggingFace and OpenAI
+    * **RAG Training** - Train RAG system with multiple input types
+    * **LLM Integration** - Query RAG system with OpenAI and GROQ models
+    * **Conversational Memory** - History-aware retrieval
     
     ### Interactive Documentation
     
     * **Swagger UI**: Available at `/docs` (this page)
     * **ReDoc**: Available at `/redoc`
     """,
-    openapi_url="/api/v1/openapi.json",
+    openapi_url="/api/openapi.json",
     docs_url="/docs",
     redoc_url="/redoc",
     contact={
@@ -61,17 +65,18 @@ app = FastAPI(
         },
         {
             "name": "RAG Training (Legacy)",
-            "description": "Legacy RAG training endpoints. Use RAG Training V2 for new implementations.",
+            "description": "Legacy RAG training endpoints. Use the V2 API for new implementations.",
         },
         {
             "name": "RAG Training V2",
-            "description": "Unified RAG training system with S3/local file storage and ChromaDB vector storage. Supports multiple input types: files, S3, SQL, text. Stores raw files separately from vectors.",
+            "description": "Unified RAG training system with S3/local file storage and ChromaDB vector storage. Supports multiple input types: files, S3, SQL, text. Includes LLM-powered query endpoints with conversational memory support.",
         },
     ],
 )
 
-# Include API router
-app.include_router(api_router, prefix="/api/v1")
+# Include API routers
+app.include_router(api_router_v1, prefix="/api/v1")
+app.include_router(api_router_v2, prefix="/api/v2")
 
 
 @app.middleware("http")
@@ -143,10 +148,24 @@ async def hello_world():
         "version": settings.VERSION,
         "docs": "/docs",
         "redoc": "/redoc",
-        "api_base": "/api/v1",
-        "endpoints": {
-            "documents": "/api/v1/documents",
-            "splitting": "/api/v1/splitting"
+        "api_versions": {
+            "v1": {
+                "base": "/api/v1",
+                "endpoints": {
+                    "documents": "/api/v1/documents",
+                    "splitting": "/api/v1/splitting",
+                    "embeddings": "/api/v1/embeddings",
+                    "rag_legacy": "/api/v1/rag"
+                }
+            },
+            "v2": {
+                "base": "/api/v2",
+                "endpoints": {
+                    "rag_training": "/api/v2/rag/train",
+                    "rag_query": "/api/v2/rag/query",
+                    "rag_query_llm": "/api/v2/rag/query/rag"
+                }
+            }
         }
     }
 

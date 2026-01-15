@@ -1,13 +1,16 @@
-# FastAPI Tutorial Project
+# FastAPI RAG Tutorial Project
 
-A simple FastAPI tutorial project to learn REST API development step by step.
+A step-by-step FastAPI tutorial project for building a RAG (Retrieval-Augmented Generation) system.
 
 ## Features
 
-- ✅ **Hello World endpoint** - Basic GET endpoint
-- ✅ **Health check endpoint** - Service health monitoring
+- ✅ **Versioned API** - `/api/v1` (legacy) and `/api/v2` (modern RAG)
+- ✅ **Document ingestion** - TXT, PDF, Word, CSV, Excel, JSON, SQL
+- ✅ **Text splitting** - Multiple splitting strategies
+- ✅ **Embeddings** - HuggingFace and OpenAI
+- ✅ **RAG training** - Unified ingestion + vector storage (ChromaDB)
+- ✅ **LLM query** - OpenAI/GROQ + conversational memory
 - ✅ **Interactive API documentation** - Auto-generated Swagger UI
-- ✅ **Simple structure** - Easy to understand and extend
 
 ## Project Structure
 
@@ -15,20 +18,24 @@ A simple FastAPI tutorial project to learn REST API development step by step.
 fastapi/
 ├── app/
 │   ├── __init__.py
-│   ├── main.py              # FastAPI application with endpoints
-│   └── core/
-│       ├── __init__.py
-│       ├── config.py        # Application settings
-│       └── dependencies.py # Dependency injection (placeholder)
+│   ├── main.py                # FastAPI application entry point
+│   ├── api/
+│   │   ├── v1/
+│   │   │   ├── api.py
+│   │   │   └── endpoints/     # Legacy endpoints (ingestion, splitting, embeddings)
+│   │   └── v2/
+│   │       ├── api.py
+│   │       └── endpoints/     # Modern RAG v2 endpoints
+│   ├── core/
+│   │   ├── config.py          # Application settings
+│   │   └── logging_config.py  # Logging configuration
+│   └── rag/                   # RAG pipeline modules
 ├── tests/
-│   ├── __init__.py
-│   ├── conftest.py         # Test configuration
-│   └── test_main.py        # Tests for endpoints
-├── pyproject.toml          # Project configuration (uv)
-├── requirements.txt        # Python dependencies (pip compatibility)
-├── .python-version         # Python version pin
-├── run.py                  # Development server script
-└── README.md               # This file
+├── pyproject.toml             # Project configuration (uv)
+├── requirements.txt           # Python dependencies (pip compatibility)
+├── .python-version            # Python version pin
+├── run.py                     # Development server script
+└── README.md
 ```
 
 ## Quick Start
@@ -111,30 +118,27 @@ The API will be available at:
 
 ## API Endpoints
 
-### Hello World
+### Root & Health
 ```http
 GET /
-```
-
-**Response:**
-```json
-{
-  "message": "Hello, World!",
-  "status": "success"
-}
-```
-
-### Health Check
-```http
 GET /health
 ```
 
-**Response:**
-```json
-{
-  "status": "healthy",
-  "service": "FastAPI Tutorial"
-}
+### V1 (Legacy)
+```
+/api/v1/documents/*    # Document ingestion
+/api/v1/splitting/*    # Text splitting
+/api/v1/embeddings/*   # Embedding utilities
+/api/v1/rag/*          # Legacy RAG training
+```
+
+### V2 (Modern RAG)
+```
+/api/v2/rag/train
+/api/v2/rag/train/upload
+/api/v2/rag/query
+/api/v2/rag/query/rag
+/api/v2/rag/collections/{collection_name}
 ```
 
 ## Testing with Postman
@@ -144,15 +148,19 @@ GET /health
    python run.py
    ```
 
-2. **Test Hello World endpoint:**
+2. **Test Root endpoint:**
    - Method: `GET`
    - URL: `http://localhost:8000/`
-   - Expected response: `{"message": "Hello, World!", "status": "success"}`
+   - Expected response: API metadata with `api_versions`
 
 3. **Test Health Check endpoint:**
    - Method: `GET`
    - URL: `http://localhost:8000/health`
-   - Expected response: `{"status": "healthy", "service": "FastAPI Tutorial"}`
+   - Expected response: `{"status": "healthy", ...}`
+
+4. **Test V2 RAG endpoints:**
+   - Train: `POST http://localhost:8000/api/v2/rag/train`
+   - Query: `POST http://localhost:8000/api/v2/rag/query`
 
 ## Running Tests
 

@@ -15,6 +15,7 @@ from langchain_core.documents import Document
 from app.rag.unified_loader import UnifiedDocumentLoader
 from app.rag.text_splitters import TextSplitterManager
 from app.rag.storage import FileStorageManager
+from app.rag.metadata_manager import MetadataManager, enrich_metadata_for_training
 from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -102,17 +103,37 @@ class TrainingProcessor:
                 logger.error(f"Failed to store file {file_path}: {str(e)}", exc_info=True)
                 raise
         
-        # Step 2: Ingest documents
+        # Step 2: Ingest documents and enrich metadata
         loader_config = config.get("loader_config", {})
         loader = UnifiedDocumentLoader(**loader_config)
-        documents = loader.load_files(
-            file_paths,
-            config.get("metadata")
-        )
-        logger.info(f"Ingested {len(documents)} document(s)")
         
-        # Step 3: Process chunks
-        chunks = self._process_chunks(documents, config)
+        all_documents = []
+        
+        # Process each file and enrich metadata
+        for idx, file_path in enumerate(file_paths):
+            file_docs = loader.load_files([file_path], config.get("metadata"))
+            
+            # Find corresponding storage info (match by index or filename)
+            file_storage_info = stored_files[idx] if idx < len(stored_files) else stored_files[0] if stored_files else {}
+            
+            # Enrich metadata for documents from this file
+            filename = Path(file_path).name
+            enrich_metadata_for_training(
+                documents=file_docs,
+                storage_info=file_storage_info,
+                input_type="files",
+                filename=filename,
+                collection_name=collection_name,
+                source_path=file_path,
+                additional_metadata=config.get("metadata")
+            )
+            
+            all_documents.extend(file_docs)
+        
+        logger.info(f"Ingested {len(all_documents)} document(s)")
+        
+        # Step 3: Process chunks (embedding config will be added during vector storage)
+        chunks = self._process_chunks(all_documents, config)
         
         return {
             "documents": documents,
@@ -144,21 +165,30 @@ class TrainingProcessor:
         loader_config = config.get("loader_config", {})
         loader = UnifiedDocumentLoader(**loader_config)
         
-        # Add storage path to metadata
-        metadata = config.get("metadata", {})
-        metadata["storage_path"] = storage_info["file_path"]
-        
+        # Load documents with base metadata
         documents = loader.load_bytes(
             filename=filename,
             content=file_content,
-            metadata=metadata,
+            metadata=config.get("metadata", {}),
             use_pymupdf=config.get("use_pymupdf", True),
             password=config.get("password"),
             max_pages=config.get("max_pages")
         )
+        
+        # Enrich metadata with file reference
+        enrich_metadata_for_training(
+            documents=documents,
+            storage_info=storage_info,
+            input_type="upload",
+            filename=filename,
+            collection_name=collection_name,
+            source_path=filename,
+            additional_metadata=config.get("metadata")
+        )
+        
         logger.info(f"Ingested {len(documents)} document(s) from uploaded file")
         
-        # Step 3: Process chunks
+        # Step 3: Process chunks (embedding config will be added during vector storage)
         chunks = self._process_chunks(documents, config)
         
         return {
@@ -201,18 +231,26 @@ class TrainingProcessor:
                 stored_files.append(storage_info)
                 
                 # Ingest document
-                metadata = config.get("metadata", {})
-                metadata["s3_path"] = s3_path
-                metadata["storage_path"] = storage_info["file_path"]
-                
                 file_docs = loader.load_bytes(
                     filename=filename,
                     content=content,
-                    metadata=metadata,
+                    metadata=config.get("metadata", {}),
                     use_pymupdf=config.get("use_pymupdf", True),
                     password=config.get("password"),
                     max_pages=config.get("max_pages")
                 )
+                
+                # Enrich metadata with file reference
+                enrich_metadata_for_training(
+                    documents=file_docs,
+                    storage_info=storage_info,
+                    input_type="s3",
+                    filename=filename,
+                    collection_name=collection_name,
+                    source_path=s3_path,
+                    additional_metadata={**(config.get("metadata", {})), "s3_path": s3_path}
+                )
+                
                 documents.extend(file_docs)
             except Exception as e:
                 logger.error(f"Failed to process S3 file {s3_path}: {str(e)}", exc_info=True)
@@ -266,7 +304,18 @@ class TrainingProcessor:
             }
         )
         
-        # Step 3: Process chunks
+        # Enrich metadata with file reference
+        enrich_metadata_for_training(
+            documents=documents,
+            storage_info=storage_info,
+            input_type="sql",
+            filename=f"{Path(db_path).name}",
+            collection_name=collection_name,
+            source_path=db_path,
+            additional_metadata={**(config.get("metadata", {})), "db_path": db_path, "sql_query": input_data.get("query")}
+        )
+        
+        # Step 3: Process chunks (embedding config will be added during vector storage)
         chunks = self._process_chunks(documents, config)
         
         return {
@@ -286,13 +335,7 @@ class TrainingProcessor:
         
         logger.info(f"Processing raw text | Length: {len(text)} characters")
         
-        # Step 1: Create document
-        document = Document(
-            page_content=text,
-            metadata=config.get("metadata", {})
-        )
-        
-        # Step 2: Store text as file
+        # Step 1: Store text as file
         storage_info = await self.storage_manager.save_file(
             content=text.encode('utf-8'),
             filename="text_input.txt",
@@ -300,11 +343,28 @@ class TrainingProcessor:
             metadata={"type": "text_input", "char_count": str(len(text))}
         )
         
-        # Add storage path to document metadata
-        document.metadata["storage_path"] = storage_info["file_path"]
+        # Step 2: Create document
+        document = Document(
+            page_content=text,
+            metadata=config.get("metadata", {})
+        )
+        
+        # Enrich metadata with file reference
+        enrich_metadata_for_training(
+            documents=[document],
+            storage_info=storage_info,
+            input_type="text",
+            filename="text_input.txt",
+            collection_name=collection_name,
+            source_path="text_input",
+            additional_metadata={**(config.get("metadata", {})), "char_count": len(text)}
+        )
         
         # Step 3: Process chunks
-        chunks = self._process_chunks([document], config)
+        chunks = self._process_chunks([document], config, embedding_config={
+            "model_name": config.get("embedding_model_name", "all-MiniLM-L6-v2"),
+            "provider": config.get("embedding_provider")
+        })
         
         return {
             "documents": [document],
@@ -317,23 +377,44 @@ class TrainingProcessor:
         documents: List[Document],
         config: Dict[str, Any]
     ) -> List[Document]:
-        """Process documents into chunks"""
+        """
+        Process documents into chunks with enriched metadata.
+        
+        Args:
+            documents: List of Document objects
+            config: Processing configuration
+            embedding_config: Embedding configuration (optional)
+        """
         splitter_manager = TextSplitterManager(
             chunk_size=config.get("chunk_size", 1000),
             chunk_overlap=config.get("chunk_overlap", 200),
             splitter_type=config.get("splitter_type", "recursive")
         )
         
-        chunks = splitter_manager.split_documents(documents)
+        all_chunks = []
         
-        # Add processing metadata to chunks
-        for chunk in chunks:
-            chunk.metadata["processed_at"] = datetime.now().isoformat()
-            chunk.metadata["chunk_size"] = config.get("chunk_size")
-            chunk.metadata["splitter_type"] = config.get("splitter_type")
+        # Process each document separately to track chunk indices per document
+        for doc_idx, document in enumerate(documents):
+            doc_chunks = splitter_manager.split_documents([document])
+            
+            # Enrich each chunk with metadata
+            total_chunks_in_doc = len(doc_chunks)
+            for chunk_idx, chunk in enumerate(doc_chunks):
+                MetadataManager.enrich_chunk_metadata(
+                    chunk=chunk,
+                    source_document=document,
+                    chunk_index=chunk_idx,
+                    total_chunks_in_document=total_chunks_in_doc,
+                    chunk_size=config.get("chunk_size", 1000),
+                    splitter_type=config.get("splitter_type", "recursive"),
+                    embedding_model_name=None,  # Will be set during vector storage
+                    embedding_provider=None  # Will be set during vector storage
+                )
+            
+            all_chunks.extend(doc_chunks)
         
-        logger.info(f"Created {len(chunks)} chunk(s) from {len(documents)} document(s)")
-        return chunks
+        logger.info(f"Created {len(all_chunks)} chunk(s) from {len(documents)} document(s)")
+        return all_chunks
     
     async def store_vectors(
         self,
@@ -359,6 +440,14 @@ class TrainingProcessor:
             embedding_model_name=embedding_config.get("model_name", "all-MiniLM-L6-v2"),
             embedding_provider=embedding_config.get("provider")
         )
+        
+        # Update embedding info in chunk metadata before storing
+        embedding_model_name = embedding_config.get("model_name", "all-MiniLM-L6-v2")
+        embedding_provider = embedding_config.get("provider")
+        
+        for chunk in chunks:
+            chunk.metadata["embedding_model"] = embedding_model_name
+            chunk.metadata["embedding_provider"] = embedding_provider
         
         chunk_ids = vector_store.add_documents(chunks)
         logger.info(f"Stored {len(chunk_ids)} chunk(s) in vector store | Collection: {collection_name}")

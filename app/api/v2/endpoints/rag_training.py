@@ -3,6 +3,8 @@ RAG Training API Endpoints V2
 
 Unified endpoint for training RAG system with multiple input types.
 Stores raw files (S3/local) and vectors (ChromaDB).
+
+This is the V2 API - use /api/v2/rag/* endpoints.
 """
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, UploadFile, File, status, Form
@@ -430,13 +432,46 @@ class QueryResponse(BaseModel):
     collection_name: str = Field(..., example="default")
 
 
+class RAGQueryRequest(BaseModel):
+    """Request model for RAG query with LLM answer generation"""
+    query: str = Field(..., description="Question to ask", example="What is machine learning?")
+    collection_name: str = Field("default", description="Name of the ChromaDB collection")
+    k: int = Field(3, ge=1, le=100, description="Number of documents to retrieve")
+    embedding_model_name: str = Field("all-MiniLM-L6-v2", description="Embedding model name (must match collection)")
+    embedding_provider: Optional[str] = Field(None, description="Embedding provider")
+    llm_provider: str = Field("openai", description="LLM provider: 'openai' or 'groq'")
+    llm_model_name: Optional[str] = Field(None, description="LLM model name (defaults to provider's default)")
+    temperature: float = Field(0.0, ge=0.0, le=2.0, description="LLM temperature (0.0 for deterministic)")
+    chain_type: str = Field("retrieval", description="Chain type: 'retrieval', 'lcel', or 'conversational'")
+    chat_history: Optional[List[Dict[str, str]]] = Field(None, description="Chat history for conversational chains [{'role': 'user'/'assistant', 'content': '...'}]")
+    openai_api_key: Optional[str] = Field(None, description="OpenAI API key (uses env var if not provided)")
+    groq_api_key: Optional[str] = Field(None, description="GROQ API key (uses env var if not provided)")
+
+
+class RAGQueryResponse(BaseModel):
+    """Response model for RAG query with LLM answer"""
+    message: str = Field(..., example="RAG query completed successfully")
+    query: str = Field(..., example="What is machine learning?")
+    answer: str = Field(..., description="LLM-generated answer")
+    context: List[Dict[str, Any]] = Field(
+        ..., 
+        description="Retrieved context documents with source information. Each item includes: rank, content, metadata (full), and source (summary with file reference)"
+    )
+    collection_name: str = Field(..., example="default")
+    llm_info: Dict[str, Any] = Field(..., description="LLM model information")
+    sources: List[Dict[str, Any]] = Field(
+        ..., 
+        description="Unique source files referenced in the answer. Includes file references, storage paths, and metadata"
+    )
+
+
 @router.post(
     "/query",
     response_model=QueryResponse,
     status_code=status.HTTP_200_OK,
-    summary="Query the trained RAG system",
+    summary="Query the trained RAG system (similarity search only)",
     description="""
-    Query the vector store to retrieve similar documents.
+    Query the vector store to retrieve similar documents (without LLM answer generation).
     
     **Use cases:**
     - Semantic search
@@ -446,6 +481,8 @@ class QueryResponse(BaseModel):
     **Returns:**
     - List of similar documents with similarity scores
     - Ranked by relevance
+    
+    **Note:** For LLM-generated answers, use `/query/rag` endpoint instead.
     """,
     response_description="Query results with similarity scores"
 )
@@ -471,16 +508,19 @@ async def query_vector_store(request: QueryRequest):
             k=request.k
         )
         
-        # Format results
-        formatted_results = [
-            {
+        # Format results with source summaries
+        from app.rag.metadata_manager import MetadataManager
+        
+        formatted_results = []
+        for idx, (doc, score) in enumerate(results):
+            source_summary = MetadataManager.create_source_summary(doc.metadata)
+            formatted_results.append({
                 "rank": idx + 1,
                 "score": float(score),
                 "content": doc.page_content[:500] + "..." if len(doc.page_content) > 500 else doc.page_content,
-                "metadata": doc.metadata
-            }
-            for idx, (doc, score) in enumerate(results)
-        ]
+                "metadata": doc.metadata,
+                "source": source_summary
+            })
         
         logger.info(f"Query completed | Results: {len(formatted_results)}")
         
@@ -498,6 +538,223 @@ async def query_vector_store(request: QueryRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error querying vector store: {str(e)}"
+        )
+
+
+@router.post(
+    "/query/rag",
+    response_model=RAGQueryResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Query RAG system with LLM answer generation",
+    description="""
+    Query the RAG system and get an LLM-generated answer based on retrieved context.
+    
+    **Complete RAG Pipeline:**
+    1. Retrieves relevant documents from vector store
+    2. Uses LLM to generate answer based on retrieved context
+    3. Returns answer with source documents
+    
+    **Supported Chain Types:**
+    - `retrieval`: Standard retrieval chain (create_retrieval_chain)
+    - `lcel`: LangChain Expression Language chain (more flexible)
+    - `conversational`: Conversational chain with history-aware retriever
+    
+    **LLM Providers:**
+    - `openai`: OpenAI models (gpt-3.5-turbo, gpt-4, etc.)
+    - `groq`: GROQ models (gemma2-9b-it, llama-3.1-8b-instant, etc.)
+    
+    **Conversational Memory:**
+    - For `conversational` chain type, provide `chat_history` to maintain context
+    - Format: `[{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]`
+    
+    **Example:**
+    ```json
+    {
+        "query": "What are the types of machine learning?",
+        "collection_name": "knowledge_base",
+        "llm_provider": "openai",
+        "llm_model_name": "gpt-3.5-turbo",
+        "chain_type": "retrieval",
+        "k": 3
+    }
+    ```
+    
+    **Returns:**
+    - LLM-generated answer
+    - Retrieved context documents
+    - LLM model information
+    """,
+    response_description="RAG query result with LLM answer and context"
+)
+async def query_rag(request: RAGQueryRequest):
+    """
+    Query RAG system with LLM answer generation.
+    """
+    logger.info(
+        f"RAG query request | "
+        f"Query: {request.query[:50]}... | "
+        f"Collection: {request.collection_name} | "
+        f"LLM Provider: {request.llm_provider} | "
+        f"Chain Type: {request.chain_type}"
+    )
+    
+    try:
+        from app.rag.rag_chain import create_rag_chain
+        from langchain_core.messages import HumanMessage, AIMessage
+        
+        # Get vector store
+        vector_store = get_vector_store_manager(
+            collection_name=request.collection_name,
+            embedding_model_name=request.embedding_model_name,
+            embedding_provider=request.embedding_provider
+        )
+        
+        # Convert chat history if provided
+        chat_history = None
+        if request.chat_history:
+            chat_history = []
+            for msg in request.chat_history:
+                role = msg.get("role", "").lower()
+                content = msg.get("content", "")
+                if role == "user":
+                    chat_history.append(HumanMessage(content=content))
+                elif role == "assistant":
+                    chat_history.append(AIMessage(content=content))
+        
+        # Create RAG chain
+        rag_chain_manager = create_rag_chain(
+            vector_store=vector_store,
+            llm_provider=request.llm_provider,
+            llm_model_name=request.llm_model_name,
+            temperature=request.temperature,
+            k=request.k,
+            chain_type=request.chain_type,
+            openai_api_key=request.openai_api_key,
+            groq_api_key=request.groq_api_key
+        )
+        
+        # Invoke RAG chain
+        result = rag_chain_manager.invoke(
+            query=request.query,
+            chat_history=chat_history
+        )
+        
+        # Extract answer and context
+        answer = result.get("answer", "")
+        context_docs = result.get("context", [])
+        
+        # Format context documents with source summaries
+        from app.rag.metadata_manager import MetadataManager
+        
+        formatted_context = []
+        unique_sources = {}  # Track unique source files
+        
+        for idx, doc in enumerate(context_docs):
+            source_summary = MetadataManager.create_source_summary(doc.metadata)
+            formatted_context.append({
+                "rank": idx + 1,
+                "content": doc.page_content[:500] + "..." if len(doc.page_content) > 500 else doc.page_content,
+                "metadata": doc.metadata,
+                "source": source_summary
+            })
+            
+            # Track unique sources by file_id or storage_path
+            file_id = doc.metadata.get("file_id")
+            storage_path = doc.metadata.get("storage_path")
+            source_key = file_id or storage_path or doc.metadata.get("original_filename", "unknown")
+            
+            if source_key not in unique_sources:
+                unique_sources[source_key] = {
+                    "file_id": file_id,
+                    "file_name": doc.metadata.get("original_filename", "Unknown"),
+                    "file_type": doc.metadata.get("file_type", "unknown"),
+                    "storage_path": storage_path,
+                    "storage_type": doc.metadata.get("storage_type"),
+                    "source_path": doc.metadata.get("source_path"),
+                    "ingested_at": doc.metadata.get("ingested_at"),
+                    "collection_name": doc.metadata.get("collection_name"),
+                    "input_type": doc.metadata.get("input_type")
+                }
+        
+        # Convert unique sources to list
+        sources_list = list(unique_sources.values())
+        
+        # Get LLM info
+        from app.rag.llm_manager import LLMManager
+        llm_manager = LLMManager(
+            provider=request.llm_provider,
+            model_name=request.llm_model_name,
+            temperature=request.temperature,
+            openai_api_key=request.openai_api_key,
+            groq_api_key=request.groq_api_key
+        )
+        llm_info = llm_manager.get_model_info()
+        
+        logger.info(
+            f"RAG query completed successfully | "
+            f"Answer length: {len(answer)} | "
+            f"Context docs: {len(formatted_context)} | "
+            f"Unique sources: {len(sources_list)}"
+        )
+        
+        return RAGQueryResponse(
+            message="RAG query completed successfully",
+            query=request.query,
+            answer=answer,
+            context=formatted_context,
+            collection_name=request.collection_name,
+            llm_info=llm_info,
+            sources=sources_list
+        )
+    except ValueError as e:
+        logger.warning(f"Invalid RAG query request: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(
+            f"Error during RAG query | Error: {type(e).__name__} | Message: {str(e)}",
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error during RAG query: {str(e)}"
+        )
+
+
+@router.get(
+    "/llm/models",
+    status_code=status.HTTP_200_OK,
+    summary="Get available LLM models",
+    description="""
+    Get a list of all available LLM models by provider.
+    
+    **Returns:**
+    - Available OpenAI models
+    - Available GROQ models
+    - Default models for each provider
+    """,
+    response_description="Available LLM models"
+)
+async def get_available_llm_models():
+    """Get available LLM models"""
+    try:
+        from app.rag.llm_manager import get_available_models, DEFAULT_MODELS
+        
+        models = get_available_models()
+        
+        return {
+            "message": "Available LLM models retrieved successfully",
+            "providers": list(models.keys()),
+            "default_models": DEFAULT_MODELS,
+            "models": models
+        }
+    except Exception as e:
+        logger.error(f"Error getting available LLM models: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error getting available LLM models: {str(e)}"
         )
 
 
